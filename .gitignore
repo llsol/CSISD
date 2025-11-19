@@ -1,0 +1,9 @@
+
+mock-README.md
+
+/data/*
+/docs/*
+
+__pycache__/
+*.pyc
+
