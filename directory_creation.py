@@ -23,6 +23,8 @@ def make_dirs():
     # 1. DIRECTORIS GLOBALS DEL PROJECTE
     # ─────────────────────────────────────────────
     BASE_DIRS = [
+        "logs",
+
         "data/corpus",
 
         "data/interim/pitch_interp",
@@ -79,6 +81,7 @@ def make_dirs():
             "annotations",
             "segments/svr",
             "segments/syn",
+            "metadata/logs"
         ]
 
         for s in subs:
@@ -91,6 +94,7 @@ def make_dirs():
         for svara in SVARAS:
             svara_dir = base / "segments/svr" / svara
             svara_dir.mkdir(parents=True, exist_ok=True)
+
 
     print(f"\nProject tree successfully created under: {PROJECT}\n")
 

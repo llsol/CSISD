@@ -1,5 +1,6 @@
 
 mock-README.md
+logger.py
 
 /data/*
 /docs/*
