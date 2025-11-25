@@ -4,9 +4,9 @@ from scipy.interpolate import CubicSpline
 from scipy.signal import savgol_filter
 
 
-def interpolate_gaps(df: pl.DataFrame, max_gap_sec: float) -> pl.DataFrame:
+def detect_zero_runs(df: pl.DataFrame, max_gap_sec: float) -> pl.DataFrame:
     """
-    Interpolate small gaps in pitch data up to max_gap_sec.
+    Detect zero runs in pitch data up to max_gap_sec.
 
     Parameters
     ----------
@@ -83,6 +83,21 @@ def mark_gap_regions(
 
     return df
 
+
+
+
+
+def remove_outliers(
+    df: pl.DataFrame
+) -> pl.DataFrame:
+    
+    print("Removing outliers method needs to be implemented.")
+
+    return df
+
+
+
+
 def compute_valid_regions(df: pl.DataFrame) -> pl.DataFrame:
 
     df = df.with_columns(pl.col("f0_interpolated").is_not_null().alias("valid_for_spline"))
@@ -144,9 +159,9 @@ def apply_savgol_filter(
         polyorder: int = 3,
         col_out = "f0_savgol"
 ) -> pl.DataFrame:
-    
-    col_out = f"{col_out}_p{window_length}_w{polyorder}"
- 
+
+    col_out = f"{col_out}_p{polyorder}_w{window_length}"
+
     f = df[col_in].to_numpy()
     group = df["group_id"].to_numpy()
 
@@ -168,7 +183,6 @@ def apply_savgol_filter(
 
 
         try:
-            from scipy.signal import savgol_filter
             v_savgol = savgol_filter(f_group, window_length=window_length, polyorder=polyorder, mode='interp')
         except Exception:
             print(f"Could not apply Savitzky-Golay filter to group {g}.")
@@ -180,3 +194,56 @@ def apply_savgol_filter(
 
     return df
 
+
+
+
+
+def preprocess_pitch(
+        df: pl.DataFrame,
+        max_gap_sec: float = 0.100,
+        spline_min_points: int = 7,
+        spline_min_duration: float = 0.050,
+        apply_savgol_13_3: bool = True,
+        apply_savgol_27_3: bool = True,
+        savgol_window_length: int = None,
+        savgol_polyorder: int = None
+) -> pl.DataFrame:
+    
+    start_idx, end_idx, durations = detect_zero_runs(df, max_gap_sec)
+
+    df = mark_gap_regions(df, start_idx, end_idx, durations, max_gap_sec)
+
+    df = remove_outliers(df)
+
+    df = compute_valid_regions(df)
+
+    df = fit_splines_to_groups(df, spline_min_points, spline_min_duration)
+
+    if apply_savgol_13_3:
+        df = apply_savgol_filter(
+            df,
+            col_in="f0_spline",
+            window_length=13,
+            polyorder=3,
+            col_out="f0_savgol"
+        )
+
+    if apply_savgol_27_3:
+        df = apply_savgol_filter(
+            df,
+            col_in="f0_spline",
+            window_length=27,
+            polyorder=3,
+            col_out="f0_savgol"
+        )
+    
+    if savgol_window_length is not None and savgol_polyorder is not None:
+        df = apply_savgol_filter(
+            df,
+            col_in="f0_spline",
+            window_length=savgol_window_length,
+            polyorder=savgol_polyorder,
+            col_out="f0_savgol"
+        )
+
+    return df
