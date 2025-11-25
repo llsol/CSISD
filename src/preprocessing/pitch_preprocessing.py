@@ -101,8 +101,15 @@ def remove_outliers(
 def compute_valid_regions(df: pl.DataFrame) -> pl.DataFrame:
 
     df = df.with_columns(pl.col("f0_interpolated").is_not_null().alias("valid_for_spline"))
-    df = df.with_columns(((pl.col("valid_for_spline") != pl.col("valid_for_spline").shift(1)).cast(pl.Int32).cumsum()).alias("group_id"))
-    
+    df = df.with_columns(
+        (pl.col("valid_for_spline") != pl.col("valid_for_spline").shift(1))
+        .cast(pl.Int32)
+        .alias("change_flag")
+    )    
+    df = df.with_columns(
+        pl.col("change_flag").cum_sum().alias("group_id")
+    )
+    df = df.drop("change_flag")
     return df
 
 

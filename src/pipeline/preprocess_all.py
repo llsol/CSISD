@@ -17,15 +17,9 @@ CORPUS_RECORDINGS = [
 ]
 
 def preprocess_one_recording(recording_id):
-    """
-    Fa el pipeline complet per un recording:
-    - Carrega pitch raw (tsv)
-    - Preprocessa (zeros, spline, savgol)
-    - Desa parquet a data/interim/<id>/pitch/
-    """
 
     raw_path = Path(f"data/corpus/{recording_id}/raw/{recording_id}_pitch_ftanet.tsv")
-    df_raw = load_pitch_file(raw_path)
+    df_raw = load_pitch_file(raw_path, column_names=["time_rel_sec", "f0_Hz"])
     
     df_prep = preprocess_pitch(df_raw)
 
@@ -34,9 +28,9 @@ def preprocess_one_recording(recording_id):
 
 def preprocess_all_recordings():
     for rec in CORPUS_RECORDINGS:
-        print(f"→ Preprocessant {rec}...")
+        print(f" Preprocessant {rec}...")
         preprocess_one_recording(rec)
-    print("\n✔ Tots els recordings preprocessats i desats en parquet.")
+    print("\n All recordings preprocessed.")
 
 
 if __name__ == "__main__":

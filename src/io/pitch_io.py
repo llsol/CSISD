@@ -18,7 +18,6 @@ def load_pitch_file(
 
     ext = file_path.suffix.lower()
 
-    mapping = dict(zip(df.columns, column_names))
 
     if engine == 'polars':
 
@@ -30,8 +29,9 @@ def load_pitch_file(
                 df = pl.read_csv(file_path, separator=sep, has_header=True)
             else:
                 df = pl.read_csv(file_path, separator=sep, has_header=False)
+                mapping = dict(zip(df.columns, column_names))
                 df = df.rename(mapping)
-        
+
         else:
             raise ValueError(f"Unsupported file extension: {ext}")
 
