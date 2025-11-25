@@ -1,6 +1,8 @@
 import polars as pl
 import numpy as np
 from scipy.interpolate import CubicSpline
+from scipy.signal import savgol_filter
+
 
 def interpolate_gaps(df: pl.DataFrame, max_gap_sec: float) -> pl.DataFrame:
     """
@@ -130,3 +132,51 @@ def fit_splines_to_groups(
     df = df.with_columns(pl.Series("f0_spline", f_spline))
 
     return df
+
+
+
+
+
+def apply_savgol_filter(
+        df: pl.DataFrame,
+        col_in: str = "f0_spline",
+        window_length: int = 13,
+        polyorder: int = 3,
+        col_out = "f0_savgol"
+) -> pl.DataFrame:
+    
+    col_out = f"{col_out}_p{window_length}_w{polyorder}"
+ 
+    f = df[col_in].to_numpy()
+    group = df["group_id"].to_numpy()
+
+    groups = np.unique(group)
+
+    f_savgol = np.full_like(f, np.nan, dtype=float)
+
+    for g in groups:
+        mask = (group == g)
+        idx = np.where(mask)[0]
+
+        f_group =f[idx]
+
+        if np.any(np.isnan(f_group)):
+            continue
+
+        if len(idx) < window_length:
+            continue
+
+
+        try:
+            from scipy.signal import savgol_filter
+            v_savgol = savgol_filter(f_group, window_length=window_length, polyorder=polyorder, mode='interp')
+        except Exception:
+            print(f"Could not apply Savitzky-Golay filter to group {g}.")
+            continue
+
+        f_savgol[idx] = v_savgol
+
+    df = df.with_columns(pl.Series(col_out, f_savgol))
+
+    return df
+
