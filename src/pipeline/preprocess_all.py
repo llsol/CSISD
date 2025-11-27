@@ -20,8 +20,8 @@ def preprocess_one_recording(recording_id):
 
     raw_path = Path(f"data/corpus/{recording_id}/raw/{recording_id}_pitch_ftanet.tsv")
     df_raw = load_pitch_file(raw_path, column_names=["time_rel_sec", "f0_Hz"])
-    
-    df_prep = preprocess_pitch(df_raw)
+
+    df_prep = preprocess_pitch(df_raw, recording_id=recording_id, create_tsv=True)
 
     save_preprocessed_pitch(df_prep, recording_id)
 

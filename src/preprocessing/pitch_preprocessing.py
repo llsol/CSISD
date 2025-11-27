@@ -1,7 +1,8 @@
 import polars as pl
 import numpy as np
-from scipy.interpolate import CubicSpline
+from scipy.interpolate import PchipInterpolator
 from scipy.signal import savgol_filter
+from scipy.signal import medfilt
 
 
 def detect_zero_runs(df: pl.DataFrame, max_gap_sec: float) -> pl.DataFrame:
@@ -49,6 +50,7 @@ def detect_zero_runs(df: pl.DataFrame, max_gap_sec: float) -> pl.DataFrame:
     
     durations = t[end_idx] - t[start_idx]
 
+
     return start_idx, end_idx, durations
 
 
@@ -75,10 +77,11 @@ def mark_gap_regions(
             too_long_mask[start:end+1] = True
         else:
             f_interp[start:end+1] = np.nan
-    
+
     df = df.with_columns([
         pl.Series("too_long_to_interp", too_long_mask),
-        pl.Series("f0_interpolated", f_interp)
+        pl.Series("f0_interpolated", f_interp),
+
     ])
 
     return df
@@ -88,10 +91,100 @@ def mark_gap_regions(
 
 
 def remove_outliers(
-    df: pl.DataFrame
+    df: pl.DataFrame,
+    col_time: str = "time_rel_sec",
+    col_f0: str = "f0_interpolated",
+    col_too_long: str = "too_long_to_interp",
+    max_velocity_sts: float = 200.0,
+    dev_thresh_cents: float = 600.0,
+    expand_neighbors: int = 1,
+    f_ref = None
 ) -> pl.DataFrame:
     
-    print("Removing outliers method needs to be implemented.")
+    t = df[col_time].to_numpy()
+    f = df[col_f0].to_numpy()
+
+    too_long = df[col_too_long].to_numpy()
+
+    N = len(f)
+
+    mask_valid = (f > 0) & (~too_long)
+    valid_idx = np.where(mask_valid)[0]
+
+    if len(valid_idx) < 3:
+        return df.with_columns(pl.Series("is_outlier", np.zeros(N, dtype=bool)))
+    
+    if f_ref is None:
+        f_ref = np.nanmedian(f[mask_valid])
+
+    f_cents = np.full(N, np.nan, dtype=float)
+    f_cents[mask_valid] = 1200.0 * np.log2(f[mask_valid] / f_ref)
+
+    max_vel_cents = max_velocity_sts * 100.0
+
+    is_outlier_vel = np.zeros(N, dtype=bool)
+
+    prev_idx = valid_idx[0]
+    prev_cents = f_cents[prev_idx]
+    prev_time = t[prev_idx]
+
+    for idx in valid_idx[1:]:
+        curr_cents = f_cents[idx]
+        curr_time = t[idx]
+
+    
+        dt = curr_time - prev_time
+        if dt <= 0:
+            prev_idx = idx
+            prev_cents = curr_cents
+            prev_time = curr_time
+            continue
+
+        dcents = abs(curr_cents - prev_cents)
+
+        max_d_allowed = max_vel_cents * dt
+
+        if np.abs(dcents) > max_d_allowed:
+            is_outlier_vel[idx] = True
+
+        prev_idx = idx
+        prev_cents = curr_cents
+        prev_time = curr_time
+
+    f_cents_valid = f_cents[valid_idx]
+
+    kernel_size = 31
+    if kernel_size > len(f_cents_valid):
+        kernel_size = len(f_cents_valid) if len(f_cents_valid) % 2 == 1 else len(f_cents_valid) - 1
+    if kernel_size < 3:
+        kernel_size = 3
+
+    median_local = medfilt(f_cents_valid, kernel_size=kernel_size)
+
+    dev = np.abs(f_cents_valid - median_local)
+    is_outlier_dev_local = dev > dev_thresh_cents
+
+    is_outlier_dev = np.zeros(N, dtype=bool)
+    is_outlier_dev[valid_idx] = is_outlier_dev_local
+
+    is_outlier = is_outlier_vel | is_outlier_dev
+
+    if expand_neighbors > 0:
+        is_outlier_expanded = is_outlier.copy()
+        for shift in range(1, expand_neighbors + 1):
+            is_outlier_expanded[:-shift] |= is_outlier[shift:]
+            is_outlier_expanded[shift:] |= is_outlier[:-shift]
+        is_outlier = is_outlier_expanded
+
+    is_outlier &= mask_valid
+
+    f_clean = f.copy()
+    f_clean[is_outlier] = np.nan
+
+    df = df.with_columns([
+        pl.Series("is_outlier", is_outlier),
+        pl.Series(col_f0, f_clean),
+    ])
 
     return df
 
@@ -100,9 +193,14 @@ def remove_outliers(
 
 def compute_valid_regions(df: pl.DataFrame) -> pl.DataFrame:
 
-    df = df.with_columns(pl.col("f0_interpolated").is_not_null().alias("valid_for_spline"))
     df = df.with_columns(
-        (pl.col("valid_for_spline") != pl.col("valid_for_spline").shift(1))
+        (
+            (pl.col("f0_interpolated") > 0)
+        ).alias("valid_for_pchip")    
+    )
+
+    df = df.with_columns(
+        (pl.col("valid_for_pchip") != pl.col("valid_for_pchip").shift(1))
         .cast(pl.Int32)
         .alias("change_flag")
     )    
@@ -116,17 +214,17 @@ def compute_valid_regions(df: pl.DataFrame) -> pl.DataFrame:
 
 
 
-def fit_splines_to_groups(
+def fit_pchip_to_groups(
         df: pl.DataFrame,
-        min_points: int = 7,
-        min_duration: float = 0.050  # en segons
+        pchip_min_points: int = 7,
+        pchip_min_duration: float = 0.050  # en segons
 ) -> pl.DataFrame:
     
     t = df["time_rel_sec"].to_numpy()
     y = df["f0_interpolated"].to_numpy()
     group = df["group_id"].to_numpy()
 
-    f_spline = np.full_like(y, np.nan, dtype=float)
+    f_pchip = np.full_like(y, np.nan, dtype=float)
 
     unique_groups = np.unique(group)
 
@@ -134,24 +232,31 @@ def fit_splines_to_groups(
         mask = (group == g)
         idx = np.where(mask)[0]
 
-        if len(idx) < min_points:
+        if len(idx) < pchip_min_points:
             continue
 
         t_group = t[idx]
         y_group = y[idx]
 
         duration = t_group[-1] - t_group[0]
-        if duration < min_duration:
+        if duration < pchip_min_duration:
             continue
-    
+
+        mask_valid = np.isfinite(y_group) & (y_group > 0)
+        if mask_valid.sum() < pchip_min_points:
+            continue
+
+        t_valid = t_group[mask_valid]
+        y_valid = y_group[mask_valid]
+
         try:
-            spline = CubicSpline(t_group, y_group, bc_type="natural", extrapolate=False)
+            interp = PchipInterpolator(t_valid, y_valid, extrapolate=False)
         except Exception:
             continue
     
-        f_spline[idx] = spline(t_group)
+        f_pchip[idx] = interp(t_group)
 
-    df = df.with_columns(pl.Series("f0_spline", f_spline))
+    df = df.with_columns(pl.Series("f0_pchip", f_pchip))
 
     return df
 
@@ -161,7 +266,7 @@ def fit_splines_to_groups(
 
 def apply_savgol_filter(
         df: pl.DataFrame,
-        col_in: str = "f0_spline",
+        col_in: str = "f0_pchip",
         window_length: int = 13,
         polyorder: int = 3,
         col_out = "f0_savgol"
@@ -180,22 +285,36 @@ def apply_savgol_filter(
         mask = (group == g)
         idx = np.where(mask)[0]
 
-        f_group =f[idx]
-
-        if np.any(np.isnan(f_group)):
-            continue
+        f_group = f[idx]
 
         if len(idx) < window_length:
             continue
+        
+        not_nan = np.isfinite(f_group)
+        if not np.any(not_nan):
+            continue
 
+        first = np.argmax(not_nan)
+        last = len(f_group) - 1 - np.argmax(not_nan[::-1])
+
+        f_trim = f_group[first:last+1]
+
+        if np.any(np.isnan(f_trim)):
+            continue
+
+        if len(f_trim) < window_length:
+            continue
 
         try:
-            v_savgol = savgol_filter(f_group, window_length=window_length, polyorder=polyorder, mode='interp')
+            f_trim_smoothed = savgol_filter(f_trim, window_length=window_length, polyorder=polyorder, mode='interp')
         except Exception:
             print(f"Could not apply Savitzky-Golay filter to group {g}.")
             continue
 
-        f_savgol[idx] = v_savgol
+        f_group_smooth = f_group.copy()
+        f_group_smooth[first:last+1] = f_trim_smoothed
+
+        f_savgol[idx] = f_group_smooth
 
     df = df.with_columns(pl.Series(col_out, f_savgol))
 
@@ -208,12 +327,14 @@ def apply_savgol_filter(
 def preprocess_pitch(
         df: pl.DataFrame,
         max_gap_sec: float = 0.100,
-        spline_min_points: int = 7,
-        spline_min_duration: float = 0.050,
+        pchip_min_points: int = 7,
+        pchip_min_duration: float = 0.050,
         apply_savgol_13_3: bool = True,
         apply_savgol_27_3: bool = True,
         savgol_window_length: int = None,
-        savgol_polyorder: int = None
+        savgol_polyorder: int = None,
+        recording_id: str = None,
+        create_tsv: bool = False
 ) -> pl.DataFrame:
     
     start_idx, end_idx, durations = detect_zero_runs(df, max_gap_sec)
@@ -224,12 +345,12 @@ def preprocess_pitch(
 
     df = compute_valid_regions(df)
 
-    df = fit_splines_to_groups(df, spline_min_points, spline_min_duration)
+    df = fit_pchip_to_groups(df, pchip_min_points, pchip_min_duration)
 
     if apply_savgol_13_3:
         df = apply_savgol_filter(
             df,
-            col_in="f0_spline",
+            col_in="f0_pchip",
             window_length=13,
             polyorder=3,
             col_out="f0_savgol"
@@ -238,7 +359,7 @@ def preprocess_pitch(
     if apply_savgol_27_3:
         df = apply_savgol_filter(
             df,
-            col_in="f0_spline",
+            col_in="f0_pchip",
             window_length=27,
             polyorder=3,
             col_out="f0_savgol"
@@ -247,10 +368,13 @@ def preprocess_pitch(
     if savgol_window_length is not None and savgol_polyorder is not None:
         df = apply_savgol_filter(
             df,
-            col_in="f0_spline",
+            col_in="f0_pchip",
             window_length=savgol_window_length,
             polyorder=savgol_polyorder,
             col_out="f0_savgol"
         )
+
+    if create_tsv:
+        df.write_csv(f"{recording_id}_output.tsv", separator="\t")
 
     return df
