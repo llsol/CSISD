@@ -333,8 +333,7 @@ def preprocess_pitch(
         apply_savgol_27_3: bool = True,
         savgol_window_length: int = None,
         savgol_polyorder: int = None,
-        recording_id: str = None,
-        create_tsv: bool = False
+
 ) -> pl.DataFrame:
     
     start_idx, end_idx, durations = detect_zero_runs(df, max_gap_sec)
@@ -373,8 +372,5 @@ def preprocess_pitch(
             polyorder=savgol_polyorder,
             col_out="f0_savgol"
         )
-
-    if create_tsv:
-        df.write_csv(f"{recording_id}_output.tsv", separator="\t")
 
     return df

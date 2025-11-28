@@ -1,6 +1,7 @@
 import polars as pl
 import pandas as pd
 from pathlib import Path
+import numpy as np
 
 def load_pitch_file(
         file_path: Path | str,
@@ -101,7 +102,9 @@ def save_pitch_file(
 
 def load_preprocessed_pitch(
         recording_id: str,
-        root_dir: Path | str = "data/interim"
+        root_dir: Path | str = "data/interim",
+        tonic_hz: float = None,
+        convert_to_cents: bool = True
 ) -> pl.DataFrame:
     """
     Load a preprocessed pitch parquet for a given recording_id
@@ -116,24 +119,80 @@ def load_preprocessed_pitch(
     if not file_path.exists():
         raise FileNotFoundError(f"No preprocessed pitch file found at {file_path}")
 
-    return pl.read_parquet(file_path)
+    df =pl.read_parquet(file_path)
 
+    candidates_clean_pitch = [
+        "f0_savgol_p3_w13",
+        "f0_pchip",
+        "f0_Hz",
+    ]
 
+    clean_pitch = None
+
+    for col in candidates_clean_pitch:
+        if col in df.columns:
+            clean_pitch = col
+            break
+    
+    
+    if convert_to_cents:
+
+        pitch_cols = [
+            "f0_Hz",
+            "f0_interpolated",
+            "f0_pchip",
+            "f0_savgol_p3_w13",
+            "f0_savgol_p3_w27",
+        ]
+
+        for col in pitch_cols:
+            if col in df.columns:
+                f_hz = df[col].to_numpy()
+                mask = np.isfinite(f_hz) & (f_hz > 0)
+                f_cents = np.full_like(f_hz, np.nan)
+                f_cents[mask] = 1200.0 * np.log2(f_hz[mask] / tonic_hz)
+                df = df.with_columns(
+                    pl.Series(f"{col}_cents", f_cents)
+                )
+
+    else:
+        clean_pitch = None
+
+        for col in candidates_clean_pitch:
+            if col in df.columns:
+                clean_pitch = col
+                break
+        
+        if clean_pitch is None:
+            raise ValueError("No suitable clean pitch column found in the dataframe.")
+
+        else:
+            f_hz = df[clean_pitch].to_numpy()
+            mask = np.isfinite(f_hz) & (f_hz > 0)
+            f_cents = np.full_like(f_hz, np.nan)
+            f_cents[mask] = 1200 * np.log2(f_hz[mask] / tonic_hz)
+            df = df.with_columns(
+                pl.Series(f"{clean_pitch}_cents", f_cents)
+            )
+            
+
+        
+    return df
 
 
 
 def save_preprocessed_pitch(
         df: pl.DataFrame,
         recording_id: str,
-        root_dir: Path | str = "data/interim"
+        root_dir: Path | str = "data/interim",
+        debug: bool = False,
+        create_tsv: bool = False
 ) -> Path:
     """
     Save the preprocessed pitch dataframe as a Parquet file
     inside data/interim/<recording_id>/pitch/.
 
-    Drops internal/temporary columns before saving:
-        - group_id
-        - valid_for_spline
+    Only selected columns are saved based on whether debug is True or False.
     """
 
     if isinstance(root_dir, str):
@@ -146,11 +205,44 @@ def save_preprocessed_pitch(
     # Output file
     out_path = out_dir / f"{recording_id}_pitch_preprocessed.parquet"
 
-    # Remove internal columns if present
-    drop_cols = [c for c in ["group_id", "valid_for_spline"] if c in df.columns]
-    df_to_save = df.drop(drop_cols)
+    production_cols = [
+        "time_rel_sec",
+        "f0_Hz",
+    ]
+    if "f0_pchip" in df.columns:
+        production_cols.append("f0_pchip")
 
+    if "f0_savgol_p3_w13" in df.columns:
+        production_cols.append("f0_savgol_p3_w13")
+
+    if "f0_savgol_p3_w27" in df.columns:
+        production_cols.append("f0_savgol_p3_w27")
+
+    debug_cols = [
+        "f0_interpolated",
+        "too_long_to_interp",
+        "is_outlier",
+        "valid_for_pchip",
+        "group_id",
+    ]
+
+    if debug:
+        out_path = out_dir / f"{recording_id}_pitch_preprocessed_debug.parquet"
+        for c in debug_cols:
+            if c in df.columns:
+                production_cols.append(c)
+
+    final_cols = [c for c in production_cols if c in df.columns]
+    df_out = df.select(final_cols)
+
+    df_out = df_out.with_columns([
+        pl.col(pl.Float64).cast(pl.Float32)
+    ])
     # Save parquet
-    df_to_save.write_parquet(out_path)
+    df_out.write_parquet(out_path)
 
+    if create_tsv:
+        tsv_path = str(out_path).replace(".parquet", ".tsv")
+        df_out.write_csv(tsv_path, separator="\t")
+    
     return out_path
