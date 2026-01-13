@@ -20,12 +20,3 @@ def time_str_to_sec(time_str: str) -> float:
     
 
 
-
-def validate_columns(df, required_columns):
-
-    '''Check if the DataFrame contains the required columns.'''
-
-    missing_columns = [col for col in required_columns if col not in df.columns]
-    
-    if missing_columns:
-        raise ValueError(f"Missing required columns: {missing_columns}")

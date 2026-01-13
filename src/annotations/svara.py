@@ -2,7 +2,7 @@
 import polars as pl
 import pandas as pd
 from pathlib import Path
-from src.annotations.utils import time_str_to_sec, validate_columns
+from src.annotations.utils import time_str_to_sec
 from src.io.annotation_io import load_annotation_tsv
 
 def load_svara_annotations(
@@ -33,8 +33,6 @@ def load_svara_annotations(
         sep='\t',
     )
 
-    required_cols = ["Begin time", "End time", "Annotation"]
-    validate_columns(df_svaras, required_cols)
 
     col_dict = {
         'Begin time': 'start_time_sec',
@@ -44,12 +42,17 @@ def load_svara_annotations(
     }
 
     if engine == 'polars':
-        df_svaras = df_svaras.drop("Tier", strict = False)
+        df_svaras = df_svaras.drop("Tier", strict=False)
+
         df_svaras = df_svaras.with_columns(
-            pl.col("Begin time").apply(time_str_to_sec).alias("Begin time"),
-            pl.col("End time").apply(time_str_to_sec).alias("End time"),
-        )
-        df_svaras = df_svaras.rename(columns=col_dict, strict = False)
+         pl.col("Begin time").cast(pl.Utf8)
+           .map_elements(time_str_to_sec, return_dtype=pl.Float64)
+           .alias("Begin time"),
+         pl.col("End time").cast(pl.Utf8)
+           .map_elements(time_str_to_sec, return_dtype=pl.Float64)
+           .alias("End time"),
+     )
+        df_svaras = df_svaras.rename(col_dict)
 
     elif engine == 'pandas':
         df_svaras = df_svaras.drop(columns=["Tier"], errors='ignore')
@@ -85,3 +88,25 @@ def attach_svara_annotations_to_pitch(df_pitch, df_svaras):
     df_pitch["svara_label"] = df_pitch["svara_label"].str.strip()
 
     return df_pitch
+
+def save_svara_annotations_parquet(
+    df_svaras: pl.DataFrame,
+    out_path: Path | str,
+) -> None:
+    """
+    Save svara annotations (with times in seconds) to a parquet file.
+    Expects columns: start_time_sec, end_time_sec, (optional) duration_sec, svara_label.
+    """
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # assegurem tipus float per temps
+    df_out = df_svaras.with_columns([
+        pl.col("start_time_sec").cast(pl.Float64),
+        pl.col("end_time_sec").cast(pl.Float64),
+    ])
+
+    if "duration_sec" in df_out.columns:
+        df_out = df_out.with_columns(pl.col("duration_sec").cast(pl.Float64))
+
+    df_out.write_parquet(out_path)

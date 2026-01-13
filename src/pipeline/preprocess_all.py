@@ -7,8 +7,6 @@ from src.preprocessing.pitch_preprocessing import preprocess_pitch
 
 # Els recordings del corpus
 CORPUS_RECORDINGS = [
-    "kmk_v1_ss_bhv",
-    "rkb_v1_ss_bhv",
     "srs_v1_bdn_sav",
     "srs_v1_drn_sav",
     "srs_v1_psn_sav",
@@ -23,7 +21,7 @@ def preprocess_one_recording(recording_id):
 
     df_prep = preprocess_pitch(df_raw)
 
-    save_preprocessed_pitch(df_prep, recording_id, debug=False, create_tsv=True)
+    save_preprocessed_pitch(df_prep, recording_id, debug=True, create_tsv=True)
 
 
 def preprocess_all_recordings():
@@ -34,4 +32,4 @@ def preprocess_all_recordings():
 
 
 if __name__ == "__main__":
-    preprocess_one_recording(CORPUS_RECORDINGS[2])
+    preprocess_all_recordings()

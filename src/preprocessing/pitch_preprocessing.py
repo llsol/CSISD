@@ -6,21 +6,6 @@ from scipy.signal import medfilt
 
 
 def detect_zero_runs(df: pl.DataFrame, max_gap_sec: float) -> pl.DataFrame:
-    """
-    Detect zero runs in pitch data up to max_gap_sec.
-
-    Parameters
-    ----------
-    df : pl.DataFrame
-        DataFrame with 'time_sec' and 'pitch_hz' columns.
-    max_gap_sec : float
-        Maximum gap duration to interpolate.
-
-    Returns
-    -------
-    pl.DataFrame
-        DataFrame with interpolated pitch values.
-    """
 
     if "f0_Hz" not in df.columns or "time_rel_sec" not in df.columns:
         raise ValueError("df must contain 'f0_Hz' and 'time_rel_sec'.")
@@ -269,7 +254,7 @@ def apply_savgol_filter(
         col_in: str = "f0_pchip",
         window_length: int = 13,
         polyorder: int = 3,
-        col_out = "f0_savgol"
+        col_out = "f0_savgol",
 ) -> pl.DataFrame:
 
     col_out = f"{col_out}_p{polyorder}_w{window_length}"

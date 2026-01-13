@@ -111,3 +111,64 @@ def attach_section_annotations_to_pitch(df_pitch, df_sections, threshold_sec=1.0
             df_pitch.at[idx_pitch, "section_label"] = label
 
     return df_pitch
+
+
+def save_section_annotations_parquet(
+    file_path: Path | str,
+    out_path: Path | str,
+    engine: str = "polars",
+    sep: str = "\t",
+) -> pl.DataFrame | pd.DataFrame:
+    """
+    Load section annotations from a headerless TSV (time_sec, label) and save as parquet.
+
+    Parameters
+    ----------
+    file_path : Path | str
+        Path to headerless section TSV (two columns: start_time_sec, section_label).
+    out_path : Path | str
+        Path to save parquet.
+    engine : str
+        'polars' or 'pandas'.
+    sep : str
+        TSV separator (default '\\t').
+
+    Returns
+    -------
+    DataFrame (Polars or Pandas) saved to parquet.
+    """
+    file_path = Path(file_path)
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if engine == "polars":
+        # headerless read
+        df_sections = pl.read_csv(
+            file_path,
+            separator=sep,
+            has_header=False,
+            new_columns=["start_time_sec", "section_label"],
+        ).with_columns(
+            pl.col("start_time_sec").cast(pl.Float64),
+            pl.col("section_label").cast(pl.Utf8),
+        ).sort("start_time_sec")
+
+        df_sections.write_parquet(out_path)
+        return df_sections
+
+    elif engine == "pandas":
+        df_sections = pd.read_csv(
+            file_path,
+            sep=sep,
+            header=None,
+            names=["start_time_sec", "section_label"],
+        )
+        df_sections["start_time_sec"] = df_sections["start_time_sec"].astype(float)
+        df_sections["section_label"] = df_sections["section_label"].astype(str)
+
+        df_sections = df_sections.sort_values("start_time_sec").reset_index(drop=True)
+        df_sections.to_parquet(out_path, index=False)
+        return df_sections
+
+    else:
+        raise ValueError("engine must be 'polars' or 'pandas'.")
