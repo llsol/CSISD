@@ -21,7 +21,7 @@ def preprocess_one_recording(recording_id):
 
     df_prep = preprocess_pitch(df_raw)
 
-    save_preprocessed_pitch(df_prep, recording_id, debug=True, create_tsv=True)
+    save_preprocessed_pitch(df_prep, recording_id, debug=False, create_tsv=True)
 
 
 def preprocess_all_recordings():
@@ -32,4 +32,6 @@ def preprocess_all_recordings():
 
 
 if __name__ == "__main__":
-    preprocess_all_recordings()
+
+    RECORDING_ID = CORPUS_RECORDINGS[0]
+    preprocess_one_recording(recording_id=RECORDING_ID)

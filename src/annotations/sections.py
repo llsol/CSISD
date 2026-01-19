@@ -34,22 +34,14 @@ def load_section_annotations(
         file_path=file_path,
         engine=engine,
         sep='\t',
+        section_annotation=True
     )
-
-
-    if engine == 'polars':
-        df_sections = df_sections.rename({old: new for old, new in zip(df_sections.columns, ["start_time_sec", "section_label"])})
-        df_sections = df_sections.with_columns(pl.col("start_time_sec").cast(pl.Float64))
-
-    elif engine == 'pandas':
-        df_sections.columns = ["start_time_sec", "section_label"]
-        df_sections["start_time_sec"] = df_sections["start_time_sec"].astype(float)
 
     return df_sections
 
 
 
-def attach_section_annotations_to_pitch(df_pitch, df_sections, threshold_sec=1.0):
+#def attach_section_annotations_to_pitch(df_pitch, df_sections, threshold_sec=1.0):
     """
     Attach section annotations to pitch DataFrame.
     Uses svara starts if available and close enough;
@@ -70,45 +62,80 @@ def attach_section_annotations_to_pitch(df_pitch, df_sections, threshold_sec=1.0
         df_pitch with a new/updated 'section_label' column.
     """
 
+def attach_section_annotations_to_pitch(df_pitch: pl.DataFrame, 
+                                        df_sections: pl.DataFrame, 
+                                        threshold_sec: float, 
+                                        verbose = False
+):
     # Work on a copy for safety
-    df_pitch = df_pitch.copy()
+    df_pitch = df_pitch.clone()
 
     # Ensure the column exists
     if "section_label" not in df_pitch.columns:
-        df_pitch["section_label"] = ""
+        df_pitch = df_pitch.with_columns(
+            pl.lit(None).alias("section_label")
+        )
 
     # Vectorized arrays for speed
     pitch_times = df_pitch["time_rel_sec"].to_numpy()
 
     # Extract svara start times if present
-    if "svara_label" in df_pitch.columns:
-        mask_starts = df_pitch["svara_label"].astype(str).str.endswith("_start")
-        svara_start_times = df_pitch.loc[mask_starts, "time_rel_sec"].to_numpy()
+    if "svara_mark" in df_pitch.columns:
+        mask_starts = df_pitch.filter(
+            pl.col("svara_mark").cast(pl.Utf8).str.ends_with("_start")
+        )["time_rel_sec"]
+        svara_start_times = mask_starts.to_numpy()
     else:
         svara_start_times = np.array([])
 
+    counter = 1
+
     # Iterate through each section annotation
-    for t_sec, label in df_sections[["start_time_sec", "section_label"]].values:
+    for row in df_sections.select(["start_time_sec", "section_label"]).rows():
+        t_sec, label = row
 
         # No svara information. Direct nearest pitch alignment
         if svara_start_times.size == 0:
             idx_pitch = np.abs(pitch_times - t_sec).argmin()
-            df_pitch.at[idx_pitch, "section_label"] = label
+            df_pitch = df_pitch.with_columns(
+                pl.when(pl.col("time_rel_sec") == pitch_times[idx_pitch])
+                  .then(pl.lit(label))
+                  .otherwise(pl.col("section_label"))
+                  .alias("section_label")
+            )
+            if verbose:
+                print(f'({counter})Svara mark closer than {threshold_sec} second(s) for section {label} at time mark {t_sec} not found!')
             continue
 
         # Compute nearest svara start
         idx_svara = np.abs(svara_start_times - t_sec).argmin()
-        nearest_svara = svara_start_times[idx_svara]
+        nearest_svara_time = svara_start_times[idx_svara]
 
         # If svara is close enough → use svara start
-        if abs(nearest_svara - t_sec) <= threshold_sec:
-            idx_pitch = np.abs(pitch_times - nearest_svara).argmin()
-            df_pitch.at[idx_pitch, "section_label"] = label
-
+        if abs(nearest_svara_time - t_sec) <= threshold_sec:
+            idx_pitch = np.abs(pitch_times - nearest_svara_time).argmin()
+            df_pitch = df_pitch.with_columns(
+                pl.when(pl.col("time_rel_sec") == pitch_times[idx_pitch])
+                  .then(pl.lit(label))
+                  .otherwise(pl.col("section_label"))
+                  .alias("section_label")
+            )
+            if verbose:
+                print(f'({counter}) Section {label} at time mark {t_sec} assigned to time mark {nearest_svara_time}, corresponding to a svara start. ')
+            
         else:
             # Fallback → use nearest pitch timestamp
             idx_pitch = np.abs(pitch_times - t_sec).argmin()
-            df_pitch.at[idx_pitch, "section_label"] = label
+            df_pitch = df_pitch.with_columns(
+                pl.when(pl.col("time_rel_sec") == pitch_times[idx_pitch])
+                  .then(pl.lit(label))
+                  .otherwise(pl.col("section_label"))
+                  .alias("section_label")
+            )
+            if verbose:
+                print(f'({counter}) Section {label} at time mark {t_sec} assigned to time mark {t_sec}. ')
+            
+        counter += 1
 
     return df_pitch
 
