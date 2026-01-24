@@ -16,7 +16,9 @@ def load_pitch_file(
     - If column_names=None, it assumes file has header.
     - If column_names is provided, it treats file as headerless and assigns these names.
     """
-
+    if isinstance(file_path, str):
+        file_path = Path(file_path)
+        
     ext = file_path.suffix.lower()
 
 

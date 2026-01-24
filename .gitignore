@@ -3,10 +3,13 @@ mock-README.md
 logger.py
 proves.py
 proves.ipynb
+local_path.py
+
 
 /data/*
 /docs/*
 
 __pycache__/
+*.py[cod]
 *.pyc
 
