@@ -1,112 +1,89 @@
+import polars as pl
+import numpy as np
+
 
 import polars as pl
-import pandas as pd
-from pathlib import Path
-from src.annotations.utils import time_str_to_sec
-from src.io.annotation_io import load_annotation_tsv
 
-def load_svara_annotations(
-        file_path: Path | str | None,
-        engine='polars',
-) -> pl.DataFrame | pd.DataFrame:
-    """
-    Load svara annotations from a .tsv file.
+import polars as pl
 
-    Parameters
-    ----------
-    file_path : Path | str | None
-        Path to the svara annotation .tsv file.
-    engine : str
-        'polars' or 'pandas' to specify the dataframe library.
-
-    Returns
-    -------
-    DataFrame (Polars or Pandas)
-    """
-
-    if file_path is None:
-        raise ValueError("file_path must be provided.")
-
-    df_svaras = load_annotation_tsv(
-        file_path=file_path,
-        engine=engine,
-        sep='\t',
-    )
-
-
-    col_dict = {
-        'Begin time': 'start_time_sec',
-        'End time': 'end_time_sec',
-        'Duration': 'duration_sec',
-        'Annotation': 'svara_label',
-    }
-
-    if engine == 'polars':
-        df_svaras = df_svaras.drop("Tier", strict=False)
-
-        df_svaras = df_svaras.with_columns(
-         pl.col("Begin time").cast(pl.Utf8)
-           .map_elements(time_str_to_sec, return_dtype=pl.Float64)
-           .alias("Begin time"),
-         pl.col("End time").cast(pl.Utf8)
-           .map_elements(time_str_to_sec, return_dtype=pl.Float64)
-           .alias("End time"),
-     )
-        df_svaras = df_svaras.rename(col_dict)
-
-    elif engine == 'pandas':
-        df_svaras = df_svaras.drop(columns=["Tier"], errors='ignore')
-        df_svaras['Begin time'] = df_svaras['Begin time'].apply(time_str_to_sec)
-        df_svaras['End time'] = df_svaras['End time'].apply(time_str_to_sec)
-        df_svaras = df_svaras.rename(columns=col_dict, errors='ignore')
-
-    return df_svaras
-
-
-
-
-def attach_svara_annotations_to_pitch(df_pitch, df_svaras):
-
-    """
-    For each svara annotation, mark the closest start and end points in DataFrame.
-    Adds/updates the 'svara_label' column.
-    """
-    df_pitch = df_pitch.copy()
-    df_pitch["svara_label"] = ""
-
-    for start, end, svara in df_svaras[["start_time_sec", "end_time_sec", "svara_label"]].values:
-        
-        # Closest time after or at start
-        after_idx = df_pitch[df_pitch["time_rel_sec"] >= start]["time_rel_sec"].idxmin()
-        df_pitch.at[after_idx, "svara_label"] += f"{svara}_start "
-        
-        # Closest time before end
-        before_idx = df_pitch[df_pitch["time_rel_sec"] < end]["time_rel_sec"].idxmax()
-        df_pitch.at[before_idx, "svara_label"] += f"{svara}_end "
-
-    # Remove trailing spaces
-    df_pitch["svara_label"] = df_pitch["svara_label"].str.strip()
-
-    return df_pitch
-
-def save_svara_annotations_parquet(
+def attach_svara_annotations_to_pitch(
+    df_pitch: pl.DataFrame,
     df_svaras: pl.DataFrame,
-    out_path: Path | str,
-) -> None:
-    """
-    Save svara annotations (with times in seconds) to a parquet file.
-    Expects columns: start_time_sec, end_time_sec, (optional) duration_sec, svara_label.
-    """
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+) -> pl.DataFrame:
+    df_pitch = df_pitch.with_row_index("row_nr")
 
-    # assegurem tipus float per temps
-    df_out = df_svaras.with_columns([
-        pl.col("start_time_sec").cast(pl.Float64),
-        pl.col("end_time_sec").cast(pl.Float64),
+    t = df_pitch.get_column("time_rel_sec")
+    n = df_pitch.height
+
+    start_idx = t.search_sorted(df_svaras["start_time_sec"])
+    end_idx = t.search_sorted(df_svaras["end_time_sec"]) - 1
+
+    df_svaras = df_svaras.with_columns([
+        start_idx.alias("_after_idx"),
+        end_idx.alias("_before_idx"),
     ])
 
-    if "duration_sec" in df_out.columns:
-        df_out = df_out.with_columns(pl.col("duration_sec").cast(pl.Float64))
+    # --- Marcatge puntual svara_label (nullable) ---
+    df_events = pl.concat([
+        df_svaras
+        .with_columns(pl.col("_after_idx").alias("row_nr"))
+        .filter(pl.col("row_nr") < n)
+        .select([
+            "row_nr",
+            (pl.col("svara_label") + pl.lit("_start")).alias("svara_label"),
+        ]),
+        df_svaras
+        .with_columns(pl.col("_before_idx").alias("row_nr"))
+        .filter(pl.col("row_nr") >= 0)
+        .select([
+            "row_nr",
+            (pl.col("svara_label") + pl.lit("_end")).alias("svara_label"),
+        ])
+    ])
 
-    df_out.write_parquet(out_path)
+    df_marks = (
+        df_events
+        .group_by("row_nr")
+        .agg(pl.col("svara_label").first())
+    )
+
+    # --- NOVETAT: svara_id expandit start..end (inclosos) ---
+    df_svara_ranges = (
+        df_svaras
+        .with_row_index("svara_id")  # 0,1,2,... segons ordre
+        .filter(
+            (pl.col("_after_idx") < n) &
+            (pl.col("_before_idx") >= 0) &
+            (pl.col("_after_idx") <= pl.col("_before_idx"))
+        )
+        .with_columns(
+            pl.int_ranges(
+                pl.col("_after_idx").cast(pl.Int64),
+                (pl.col("_before_idx") + 1).cast(pl.Int64)  # [start, end+1)
+            ).alias("row_nr")
+        )
+        .select(["row_nr", "svara_id"])
+        .explode("row_nr")
+    )
+
+    df_svara_id = (
+        df_svara_ranges
+        .group_by("row_nr")
+        .agg(pl.col("svara_id").min())  # si mai hi ha solapaments, agafa el menor
+    )
+
+    # Neteja columnes prèvies conflictives (incloent *_right antics)
+    df_pitch = df_pitch.drop(
+        ["svara_label", "svara_label_right", "svara_id", "svara_id_right"],
+        strict=False
+    )
+
+    # Join de marques + ids
+    df_pitch = (
+        df_pitch
+        .join(df_marks, on="row_nr", how="left")
+        .join(df_svara_id, on="row_nr", how="left")
+        .drop("row_nr")
+    )
+
+    return df_pitch

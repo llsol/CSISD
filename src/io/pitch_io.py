@@ -210,6 +210,7 @@ def save_preprocessed_pitch(
     production_cols = [
         "time_rel_sec",
         "f0_Hz",
+        "group_id",
     ]
     if "f0_pchip" in df.columns:
         production_cols.append("f0_pchip")
@@ -225,7 +226,6 @@ def save_preprocessed_pitch(
         "too_long_to_interp",
         "is_outlier",
         "valid_for_pchip",
-        "group_id",
     ]
 
     if debug:

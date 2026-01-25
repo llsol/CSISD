@@ -1,4 +1,96 @@
+import polars as pl
+import numpy as np
 
+def attach_section_annotations_to_pitch(
+    df_pitch: pl.DataFrame,
+    df_sections: pl.DataFrame,
+    threshold_sec: float = 1.0
+) -> pl.DataFrame:
+    """
+    Assigna etiquetes de secció al DataFrame de pitch.
+    Usa les marques de svara si estan disponibles i són properes.
+    """
+    df_pitch = df_pitch.clone().with_row_index("row_nr")
+
+    pitch_times = df_pitch["time_rel_sec"].to_numpy()
+
+    # Extreu temps de svara_start si existeixen
+    svara_start_times = (
+        df_pitch
+        .filter(pl.col("svara_label").fill_null("").str.ends_with("_start"))
+        ["time_rel_sec"]
+        .to_numpy()
+    )
+
+    # Inicialitza columna (nullable string)
+    df_pitch = df_pitch.with_columns(pl.lit(None).cast(pl.Utf8).alias("section_label"))
+
+    for t_sec, label in df_sections[["start_time_sec", "section_label"]].rows():
+        if svara_start_times.size > 0:
+            nearest_idx = np.abs(svara_start_times - t_sec).argmin()
+            if abs(svara_start_times[nearest_idx] - t_sec) <= threshold_sec:
+                idx_pitch = np.abs(pitch_times - svara_start_times[nearest_idx]).argmin()
+            else:
+                idx_pitch = np.abs(pitch_times - t_sec).argmin()
+        else:
+            idx_pitch = np.abs(pitch_times - t_sec).argmin()
+
+        # Assigna etiqueta per índex (no per float equality)
+        df_pitch = df_pitch.with_columns(
+            pl.when(pl.col("row_nr") == int(idx_pitch))
+              .then(pl.lit(label))
+              .otherwise(pl.col("section_label"))
+              .alias("section_label")
+        )
+
+    return df_pitch.drop("row_nr")
+
+'''
+def attach_section_annotations_to_pitch(
+    df_pitch: pl.DataFrame,
+    df_sections: pl.DataFrame,
+    threshold_sec: float = 1.0
+) -> pl.DataFrame:
+    """
+    Assigna etiquetes de secció al DataFrame de pitch.
+    Usa les marques de svara si estan disponibles i són properes.
+    """
+    df_pitch = df_pitch.clone()
+    pitch_times = df_pitch["time_rel_sec"].to_numpy()
+
+    # Extreu temps de svara_start si existeixen
+    svara_start_times = (
+        df_pitch.filter(pl.col("svara_label").str.ends_with("_start"))["time_rel_sec"]
+        .to_numpy()
+    )
+
+    # Inicialitza columna
+    df_pitch = df_pitch.with_columns(pl.lit(None).alias("section_label"))
+
+    for t_sec, label in df_sections[["start_time_sec", "section_label"]].rows():
+        if svara_start_times.size > 0:
+            # Busca el svara_start més proper
+            nearest_idx = np.abs(svara_start_times - t_sec).argmin()
+            if abs(svara_start_times[nearest_idx] - t_sec) <= threshold_sec:
+                idx_pitch = np.abs(pitch_times - svara_start_times[nearest_idx]).argmin()
+            else:
+                idx_pitch = np.abs(pitch_times - t_sec).argmin()
+        else:
+            idx_pitch = np.abs(pitch_times - t_sec).argmin()
+
+        # Assigna etiqueta
+        df_pitch = df_pitch.with_columns(
+            pl.when(pl.col("time_rel_sec") == pitch_times[idx_pitch])
+              .then(pl.lit(label))
+              .otherwise(pl.col("section_label"))
+              .alias("section_label")
+        )
+
+    return df_pitch
+
+
+'''
+"""
 import polars as pl
 import pandas as pd
 import numpy as np
@@ -12,7 +104,7 @@ def load_section_annotations(
         file_path: Path | str | None,
         engine='polars',
 ) -> pl.DataFrame | pd.DataFrame:
-    """
+    '''
     Load section annotations from a .tsv file.
 
     Parameters
@@ -25,7 +117,7 @@ def load_section_annotations(
     Returns
     -------
     DataFrame (Polars or Pandas)
-    """
+    '''
 
     if file_path is None:
         raise ValueError("file_path must be provided.")
@@ -42,7 +134,7 @@ def load_section_annotations(
 
 
 #def attach_section_annotations_to_pitch(df_pitch, df_sections, threshold_sec=1.0):
-    """
+    '''
     Attach section annotations to pitch DataFrame.
     Uses svara starts if available and close enough;
     otherwise uses the closest general pitch timestamp.
@@ -60,7 +152,7 @@ def load_section_annotations(
     -------
     pandas.DataFrame
         df_pitch with a new/updated 'section_label' column.
-    """
+    '''
 
 def attach_section_annotations_to_pitch(df_pitch: pl.DataFrame, 
                                         df_sections: pl.DataFrame, 
@@ -146,7 +238,7 @@ def save_section_annotations_parquet(
     engine: str = "polars",
     sep: str = "\t",
 ) -> pl.DataFrame | pd.DataFrame:
-    """
+    '''
     Load section annotations from a headerless TSV (time_sec, label) and save as parquet.
 
     Parameters
@@ -163,7 +255,7 @@ def save_section_annotations_parquet(
     Returns
     -------
     DataFrame (Polars or Pandas) saved to parquet.
-    """
+    '''
     file_path = Path(file_path)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -199,3 +291,4 @@ def save_section_annotations_parquet(
 
     else:
         raise ValueError("engine must be 'polars' or 'pandas'.")
+"""
