@@ -119,12 +119,14 @@ def save_pitch_file(
 
 
 
+
+
 def load_preprocessed_pitch(
         recording_id: str,
         root_dir: Path | str = "data/interim",
         tonic_hz: float = None,
         convert_to_cents: bool = True
-) -> pl.DataFrame:
+):
     """
     Load a preprocessed pitch parquet for a given recording_id
     from data/interim/<recording_id>/pitch/.
@@ -135,35 +137,28 @@ def load_preprocessed_pitch(
 
     root_dir = _resolve_path(root_dir)
 
-    file_path = root_dir / recording_id / "pitch" / f"{recording_id}_pitch_preprocessed.parquet"
+    file_path = (
+        root_dir
+        / recording_id
+        / "pitch"
+        / f"{recording_id}_pitch_preprocessed.parquet"
+    )
 
     if not file_path.exists():
         raise FileNotFoundError(f"No preprocessed pitch file found at {file_path}")
 
-    df =pl.read_parquet(file_path)
+    df = pl.read_parquet(file_path)
 
-    candidates_clean_pitch = [
-        "f0_savgol_p3_w13",
-        "f0_pchip",
-        "f0_Hz",
-    ]
+    if convert_to_cents and tonic_hz is None:
+        raise ValueError("convert_to_cents=True requires tonic_hz")
 
-    clean_pitch = None
-
-    for col in candidates_clean_pitch:
-        if col in df.columns:
-            clean_pitch = col
-            break
-    
-    
     if convert_to_cents:
-
         pitch_cols = [
             "f0_Hz",
             "f0_interpolated",
             "f0_pchip",
             "f0_savgol_p3_w13",
-            "f0_savgol_p3_w27",
+            "f0_savgol_p3_w27"
         ]
 
         for col in pitch_cols:
@@ -176,29 +171,90 @@ def load_preprocessed_pitch(
                     pl.Series(f"{col}_cents", f_cents)
                 )
 
-    else:
-        clean_pitch = None
-
-        for col in candidates_clean_pitch:
-            if col in df.columns:
-                clean_pitch = col
-                break
-        
-        if clean_pitch is None:
-            raise ValueError("No suitable clean pitch column found in the dataframe.")
-
-        else:
-            f_hz = df[clean_pitch].to_numpy()
-            mask = np.isfinite(f_hz) & (f_hz > 0)
-            f_cents = np.full_like(f_hz, np.nan)
-            f_cents[mask] = 1200 * np.log2(f_hz[mask] / tonic_hz)
-            df = df.with_columns(
-                pl.Series(f"{clean_pitch}_cents", f_cents)
-            )
-            
-
-        
     return df
+
+
+
+#def load_preprocessed_pitch(
+#        recording_id: str,
+#        root_dir: Path | str = "data/interim",
+#        tonic_hz: float = None,
+#        convert_to_cents: bool = True
+#) -> pl.DataFrame:
+#    """
+#    Load a preprocessed pitch parquet for a given recording_id
+#    from data/interim/<recording_id>/pitch/.
+#    """
+#
+#    if isinstance(root_dir, str):
+#        root_dir = Path(root_dir)
+#
+#    root_dir = _resolve_path(root_dir)
+#
+#    file_path = root_dir / recording_id / "pitch" / f"{recording_id}_pitch_preprocessed.parquet"
+#
+#    if not file_path.exists():
+#        raise FileNotFoundError(f"No preprocessed pitch file found at {file_path}")
+#
+#    df =pl.read_parquet(file_path)
+#
+#    candidates_clean_pitch = [
+#        "f0_savgol_p3_w13",
+#        "f0_pchip",
+#        "f0_Hz",
+#    ]
+#
+#    clean_pitch = None
+#
+#    for col in candidates_clean_pitch:
+#        if col in df.columns:
+#            clean_pitch = col
+#            break
+#    
+#    
+#    if convert_to_cents:
+#
+#        pitch_cols = [
+#            "f0_Hz",
+#            "f0_interpolated",
+#            "f0_pchip",
+#            "f0_savgol_p3_w13",
+#            "f0_savgol_p3_w27",
+#        ]
+#
+#        for col in pitch_cols:
+#            if col in df.columns:
+#                f_hz = df[col].to_numpy()
+#                mask = np.isfinite(f_hz) & (f_hz > 0)
+#                f_cents = np.full_like(f_hz, np.nan)
+#                f_cents[mask] = 1200.0 * np.log2(f_hz[mask] / tonic_hz)
+#                df = df.with_columns(
+#                    pl.Series(f"{col}_cents", f_cents)
+#                )
+#
+#    else:
+#        clean_pitch = None
+#
+#        for col in candidates_clean_pitch:
+#            if col in df.columns:
+#                clean_pitch = col
+#                break
+#        
+#        if clean_pitch is None:
+#            raise ValueError("No suitable clean pitch column found in the dataframe.")
+#
+#        else:
+#            f_hz = df[clean_pitch].to_numpy()
+#            mask = np.isfinite(f_hz) & (f_hz > 0)
+#            f_cents = np.full_like(f_hz, np.nan)
+#            f_cents[mask] = 1200 * np.log2(f_hz[mask] / tonic_hz)
+#            df = df.with_columns(
+#                pl.Series(f"{clean_pitch}_cents", f_cents)
+#            )
+#            
+#
+#        
+#    return df
 
 
 
@@ -272,3 +328,47 @@ def save_preprocessed_pitch(
         df_out.write_csv(tsv_path, separator="\t")
     
     return out_path
+
+
+
+
+def save_flat_regions(
+        df: pl.DataFrame,
+        recording_id: str,
+        root_dir: Path | str = "data/interim",
+):
+    """
+    Save pitch + flat_region for plotting / inspection.
+    """
+
+    if isinstance(root_dir, str):
+        root_dir = Path(root_dir)
+
+    root_dir = _resolve_path(root_dir)
+
+    out_dir = root_dir / recording_id / "flat_regions"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    file_path = out_dir / f"{recording_id}_flat_regions.parquet"
+
+
+    # COLUMNS TO SAVE
+
+    SAVE_COLS = [
+        "time_rel_sec",
+
+        # pitch (tria les que t'interessin per plots)
+        "f0_savgol_p3_w13",
+        "f0_savgol_p3_w13_cents",
+
+        # flatness
+        "flat_region",
+
+        "svara_id"
+    ]
+
+    cols_present = [c for c in SAVE_COLS if c in df.columns]
+    df_out = df.select(cols_present)
+
+    df_out.write_parquet(file_path)
+    return file_path
