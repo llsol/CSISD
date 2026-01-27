@@ -1,5 +1,5 @@
 from pathlib import Path
-from src.annotations.io import load_annotations, save_annotations
+from src.io.annotation_io import load_annotations, save_annotations
 from src.annotations.svara import attach_svara_annotations_to_pitch
 from src.annotations.sections import attach_section_annotations_to_pitch
 from src.io.pitch_io import load_pitch_file, save_pitch_file

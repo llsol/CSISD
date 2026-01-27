@@ -3,9 +3,114 @@ import numpy as np
 import polars as pl
 from matplotlib.collections import LineCollection
 
+
+def plot_pitchcurve_svara_window(
+    df_pitch: pl.DataFrame,
+    svara_id: int,
+    pitch_col: str = "f0_savgol_p3_w13",
+    time_col: str = "time_rel_sec",
+    svara_id_col: str = "svara_id",
+    svara_start_label_col: str = "svara_start_label",
+    svara_end_label_col: str = "svara_end_label",
+    n: int = 1,
+    figsize: tuple = (12, 4),
+):
+    """
+    Ploteja una finestra de svaras al voltant d'un `svara_id`.
+
+    Selecció de finestra segons n:
+      n=0 -> només la svara
+      n=1 -> svara + anterior
+      n=2 -> anterior + posterior
+      n=3 -> 2 anteriors + posterior
+      n=4 -> 2 anteriors + 2 posteriors
+    (generalització: left=ceil(n/2), right=floor(n/2))
+
+    Marca amb línies verticals discontínues:
+      - tots els starts (svara_start_label != null)
+      - tots els ends   (svara_end_label != null)
+
+    Retorna (fig, ax)
+    """
+    if time_col not in df_pitch.columns:
+        raise ValueError(f"df_pitch no té columna '{time_col}'")
+    if pitch_col not in df_pitch.columns:
+        raise ValueError(f"df_pitch no té columna '{pitch_col}'")
+    if svara_id_col not in df_pitch.columns:
+        raise ValueError(f"df_pitch no té columna '{svara_id_col}'")
+
+    if n < 0:
+        raise ValueError("n ha de ser >= 0")
+
+    left = int((n + 1) // 2)   # ceil(n/2)
+    right = int(n // 2)        # floor(n/2)
+
+    ids = (
+        df_pitch
+        .select(pl.col(svara_id_col).drop_nulls().unique().sort())
+        .get_column(svara_id_col)
+        .to_list()
+    )
+    if len(ids) == 0:
+        raise ValueError("No hi ha cap svara_id al df_pitch (tots són null?)")
+    if svara_id not in ids:
+        raise ValueError(f"svara_id={svara_id} no existeix. Rang: {ids[0]}..{ids[-1]}")
+
+    k = ids.index(svara_id)
+    k0 = max(0, k - left)
+    k1 = min(len(ids) - 1, k + right)
+    window_ids = ids[k0:k1 + 1]
+
+    df_win = df_pitch.filter(pl.col(svara_id_col).is_in(window_ids)).sort(time_col)
+    if df_win.is_empty():
+        raise ValueError("Finestra buida (inesperat)")
+
+    t = df_win.get_column(time_col).to_numpy()
+    y = df_win.get_column(pitch_col).to_numpy()
+
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.plot(t, y)
+
+    ax.set_title(f"{pitch_col} — svara_id={svara_id} (window: {window_ids[0]}..{window_ids[-1]})")
+    ax.set_xlabel(time_col)
+    ax.set_ylabel(pitch_col)
+
+    # --- marca starts ---
+    if svara_start_label_col in df_win.columns:
+        df_starts = df_win.filter(pl.col(svara_start_label_col).is_not_null())
+        if not df_starts.is_empty():
+            start_times = (
+                df_starts
+                .select(pl.col(time_col).unique().sort())
+                .get_column(time_col)
+                .to_list()
+            )
+            for ts in start_times:
+                ax.axvline(float(ts), linestyle="--")
+
+    # --- marca ends ---
+    if svara_end_label_col in df_win.columns:
+        df_ends = df_win.filter(pl.col(svara_end_label_col).is_not_null())
+        if not df_ends.is_empty():
+            end_times = (
+                df_ends
+                .select(pl.col(time_col).unique().sort())
+                .get_column(time_col)
+                .to_list()
+            )
+            for ts in end_times:
+                ax.axvline(float(ts), linestyle="--")
+
+    ax.margins(x=0.01)
+    fig.tight_layout()
+    return fig, ax
+
+
+
+
 def plot_segment_multiplot(
     df,
-    main_cols,
+    main_cols="f0_savgol_p3_w13",
     sub_cols=None,
     time_col="time_rel_sec",
     bool_markers=None,

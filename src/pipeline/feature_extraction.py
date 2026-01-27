@@ -104,14 +104,19 @@ def compute_features_by_svara_id(
 ) -> pl.DataFrame:
     """
     Computa features per cada svara_id (una fila per segment).
-    Les feature_functions han de retornar dicts.
+
+    Assumeix:
+      - df_pitch té:
+          * svara_id
+          * svara_start_label  (str o null)
+          * svara_end_label    (str o null)
+
+    Deriva la classe `svara` a partir de `svara_start_label`.
     """
-    if "svara_id" not in df_pitch.columns:
-        raise ValueError("df_pitch no té columna 'svara_id'")
-    if "time_rel_sec" not in df_pitch.columns:
-        raise ValueError("df_pitch no té columna 'time_rel_sec'")
-    if pitch_column not in df_pitch.columns:
-        raise ValueError(f"df_pitch no té columna '{pitch_column}'")
+    required_cols = ["svara_id", "time_rel_sec", pitch_column]
+    for c in required_cols:
+        if c not in df_pitch.columns:
+            raise ValueError(f"df_pitch no té columna '{c}'")
 
     rows = []
 
@@ -127,14 +132,28 @@ def compute_features_by_svara_id(
         if df_svara.is_empty():
             continue
 
+        # --- temps i mida ---
         svara_start = df_svara["time_rel_sec"].min()
         svara_end = df_svara["time_rel_sec"].max()
         svara_duration = svara_end - svara_start
         svara_n = df_svara.height
 
+        # --- deriva la classe de svara ---
+        svara = None
+        if "svara_start_label" in df_svara.columns:
+            start_labels = (
+                df_svara
+                .select(pl.col("svara_start_label").drop_nulls())
+                .get_column("svara_start_label")
+                .to_list()
+            )
+            if len(start_labels) > 0:
+                # per disseny: n'hi ha com a molt un
+                svara = start_labels[0]
+
+        # --- features ---
         features = {}
         for fn in feature_functions:
-            # compute_base_features ara accepta df directament
             out = fn(df_svara)
             if not isinstance(out, dict):
                 raise ValueError(f"{fn.__name__} ha de retornar un dict")
@@ -143,6 +162,7 @@ def compute_features_by_svara_id(
         row = {
             "recording_id": recording_id,
             "svara_id": svara_id,
+            "svara": svara,
             "svara_start_sec": float(svara_start) if svara_start is not None else np.nan,
             "svara_end_sec": float(svara_end) if svara_end is not None else np.nan,
             "svara_duration_sec": float(svara_duration) if svara_duration is not None else np.nan,
@@ -155,5 +175,6 @@ def compute_features_by_svara_id(
     return pl.DataFrame(rows)
 
 
+
 if __name__ == "__main__":
-    feature_extraction_one_recording(recording_id=SARASUDA_VARNAM[0])
+    feature_extraction_all_recordings()

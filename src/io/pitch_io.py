@@ -2,6 +2,20 @@ import polars as pl
 import pandas as pd
 from pathlib import Path
 import numpy as np
+from settings import PROJECT_ROOT
+
+
+
+
+def _resolve_path(p: Path | str) -> Path:
+    p = Path(p)
+    if p.is_absolute():
+        return p
+    return PROJECT_ROOT / p
+
+
+
+
 
 def load_pitch_file(
         file_path: Path | str,
@@ -18,7 +32,9 @@ def load_pitch_file(
     """
     if isinstance(file_path, str):
         file_path = Path(file_path)
-        
+    
+    file_path = _resolve_path(file_path)
+
     ext = file_path.suffix.lower()
 
 
@@ -69,8 +85,9 @@ def save_pitch_file(
         sep='\t',
 ):
 
-    ext = file_path.suffix.lower()
+    file_path = _resolve_path(file_path)
 
+    ext = file_path.suffix.lower()
 
     if engine == 'polars':
 
@@ -115,6 +132,8 @@ def load_preprocessed_pitch(
 
     if isinstance(root_dir, str):
         root_dir = Path(root_dir)
+
+    root_dir = _resolve_path(root_dir)
 
     file_path = root_dir / recording_id / "pitch" / f"{recording_id}_pitch_preprocessed.parquet"
 
@@ -200,6 +219,8 @@ def save_preprocessed_pitch(
     if isinstance(root_dir, str):
         root_dir = Path(root_dir)
 
+    root_dir = _resolve_path(root_dir)
+
     # Output directory
     out_dir = root_dir / recording_id / "pitch"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -211,6 +232,9 @@ def save_preprocessed_pitch(
         "time_rel_sec",
         "f0_Hz",
         "group_id",
+        "svara_id",
+        "svara_start_label",
+        "svara_end_label",
     ]
     if "f0_pchip" in df.columns:
         production_cols.append("f0_pchip")
