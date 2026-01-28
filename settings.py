@@ -59,8 +59,8 @@ SVARA_END_LABEL_COL = "svara_end_label"
 CANDIDATE_COL = "flat_candidate"
 STABLE_COL = "flat_region"
 D1_THRESHOLD = 1000.0
-MIN_STABLE_DURATION_SEC = 0.1   # o el que vulguis
-TOLERANCE_CENTS = 20.0
+MIN_STABLE_DURATION_SEC = 0.05     # o el que vulguis
+TOLERANCE_CENTS = 30.0
 
 # opcional (si vols guardar-ho al parquet per inspecció)
 ABS_DERIV1_COL = "abs_deriv1_cents_per_sec"
