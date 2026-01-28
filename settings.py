@@ -59,7 +59,7 @@ SVARA_END_LABEL_COL = "svara_end_label"
 CANDIDATE_COL = "flat_candidate"
 STABLE_COL = "flat_region"
 D1_THRESHOLD = 1000.0
-MIN_STABLE_DURATION_SEC = 0.05     # o el que vulguis
+MIN_STABLE_DURATION_SEC = 0.05   # o el que vulguis
 TOLERANCE_CENTS = 30.0
 
 # opcional (si vols guardar-ho al parquet per inspecció)
@@ -92,3 +92,13 @@ PREPROCESSED_PITCH_PATH = (
     / "pitch"
     / f"{CURRENT_PIECE}_pitch_preprocessed.parquet"
 )
+
+
+# Dictionary of dictionaries for different ragas
+
+RAGAM_SVARAS_CENTS = {
+    "saveri": {
+        "svarasthanas": ["S", "R1", "G2", "M1", "P", "D1", "N2", "Ṡ"],
+        "intervals_cents": [0, 100, 200, 200, 200, 100, 200, 200],  
+    }
+}

@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
 from matplotlib.collections import LineCollection
+import settings as S
 
 
 def plot_svara_window_with_flat_regions(
@@ -328,31 +329,23 @@ def plot_segment_multiplot(
     plt.show()
     return fig, axes
 
-#
-# ----------------------------
+
 # 4) KDE with svara grid
-# ----------------------------
+
 def plot_pitch_kde_with_svaras(
-    pitch_grid_cents,
-    density,
-    peak_cents,
-    peak_densities,
+    pitch_grid_cents: np.ndarray,
+    density: np.ndarray,
+    peak_cents: np.ndarray,
+    peak_densities: np.ndarray,
     *,
-    peaks_df: pl.DataFrame | None = None,   # renamed from svarasthana_df
+    peaks_df: pl.DataFrame | None = None,
+    svara_labels = S.RAGAM_SVARAS_CENTS["saveri"]["svarasthanas"],
+    intervals_cents = S.RAGAM_SVARAS_CENTS["saveri"]["intervals_cents"],
 ):
     """
-    Plot KDE pitch distribution with detected peaks and svara reference grid.
-
-    pitch_grid_cents : np.ndarray
-    density          : np.ndarray
-    peak_cents       : np.ndarray
-    peak_densities   : np.ndarray
-    peaks_df         : Polars DF with column 'cents' (optional)
+    KDE in cents + detected peaks + theoretical svara grid.
     """
-
-    svara_labels = ["S", "R2", "G2", "M1", "P", "D1", "D2", "N2", "Ṡ"]
-    intervals = [0, 200, 100, 200, 200, 100, 100, 100, 200]
-    base_cents = np.cumsum(intervals)
+    base_cents = np.cumsum(intervals_cents)
 
     cents_positions = []
     svaras_full = []
@@ -371,23 +364,24 @@ def plot_pitch_kde_with_svaras(
     plt.plot(peak_cents, peak_densities, "ro", label="Detected peaks")
 
     plt.title("Peak pitch density detection (svarasthana candidates)")
-    plt.xlabel("Svaras across octaves")
+    plt.xlabel("Cents (relative to tonic)")
     plt.ylabel("Density")
     plt.grid(True, linestyle="--", alpha=0.5)
 
+    # theoretical grid
     for pos in cents_positions:
         plt.axvline(x=pos, color="gray", linestyle="--", alpha=0.4)
 
     plt.xticks(cents_positions, svaras_full, fontsize=9)
 
-    # optional annotation of detected peaks
-    if peaks_df is not None and "cents" in peaks_df.columns:
-        for svara in peaks_df["cents"].to_numpy():
-            idx = np.abs(pitch_grid_cents - svara).argmin()
+    # optional annotation (from DF)
+    if peaks_df is not None and "peak_cents" in peaks_df.columns:
+        for c in peaks_df["peak_cents"].to_numpy():
+            idx = np.abs(pitch_grid_cents - c).argmin()
             plt.text(
-                svara,
-                density[idx],
-                f"{svara:.0f}",
+                float(c),
+                float(density[idx]),
+                f"{c:.0f}",
                 fontsize=8,
                 color="gray",
                 ha="left",
@@ -397,6 +391,7 @@ def plot_pitch_kde_with_svaras(
     plt.legend()
     plt.tight_layout()
     plt.show()
+
 
 
 def _add_flat_regions_to_ax(

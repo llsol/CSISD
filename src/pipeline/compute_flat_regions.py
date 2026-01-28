@@ -1,7 +1,7 @@
 import settings as S
 
 from src.io.pitch_io import load_preprocessed_pitch
-from src.features.flatness import extract_flat_regions
+from src.features.flatness import extract_flat_regions, add_flat_id
 from src.io.pitch_io import save_flat_regions
 
 
@@ -35,14 +35,16 @@ def run_flat_regions(recording_id: str):
         verbose=False,
     )
 
+    df = add_flat_id(df, flat_col="flat_region", out_col="flat_id")
+
     out_path = save_flat_regions(df, recording_id=recording_id, root_dir=S.DATA_INTERIM)
     return out_path
 
 
 if __name__ == "__main__":
-    #for recording_id in S.SARASUDA_VARNAM:
-    #    print(f"Processing flat regions for recording: {recording_id}")
-    #    out_path = run_flat_regions(recording_id)
-    #    print(f"Saved flat regions to: {out_path}")
-    recording_id = S.CURRENT_PIECE
-    print(run_flat_regions(recording_id))
+    for recording_id in S.SARASUDA_VARNAM:
+        print(f"Processing flat regions for recording: {recording_id}")
+        out_path = run_flat_regions(recording_id)
+        print(f"Saved flat regions to: {out_path}")
+    #recording_id = S.CURRENT_PIECE
+    #print(run_flat_regions(recording_id))

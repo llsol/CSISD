@@ -355,15 +355,20 @@ def save_flat_regions(
     # COLUMNS TO SAVE
 
     SAVE_COLS = [
+        "f0_Hz",
+        "f0_cents",
+        "f0_pchip",
+        "f0_pchip_cents",
         "time_rel_sec",
-
         # pitch (tria les que t'interessin per plots)
         "f0_savgol_p3_w13",
         "f0_savgol_p3_w13_cents",
-
         # flatness
+        "flat_candidate",
         "flat_region",
-
+        "flat_id",
+        "svara_start_label",
+        "svara_end_label",
         "svara_id"
     ]
 
@@ -371,4 +376,35 @@ def save_flat_regions(
     df_out = df.select(cols_present)
 
     df_out.write_parquet(file_path)
+    
     return file_path
+
+
+
+
+
+def load_flat_regions(
+        recording_id: str,
+        root_dir: Path | str = "data/interim",
+) -> pl.DataFrame:
+    """
+    Load data/interim/<recording_id>/flat_regions/<recording_id>_flat_regions.parquet
+    """
+    if isinstance(root_dir, str):
+        root_dir = Path(root_dir)
+
+    root_dir = _resolve_path(root_dir)
+
+    file_path = (
+        root_dir
+        / recording_id
+        / "flat_regions"
+        / f"{recording_id}_flat_regions.parquet"
+    )
+
+    if not file_path.exists():
+        raise FileNotFoundError(f"No flat regions file found at {file_path}")
+
+    df =pl.read_parquet(file_path)
+
+    return df
