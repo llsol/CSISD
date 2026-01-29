@@ -1,8 +1,10 @@
 import numpy as np
 import polars as pl
 import matplotlib.pyplot as plt
+from matplotlib.collections import LineCollection
 from scipy.stats import gaussian_kde
 from scipy.signal import find_peaks
+import settings as S
 
 def hz_to_cents(f_hz: np.ndarray, tonic_hz: float) -> np.ndarray:
     f_hz = np.asarray(f_hz, dtype=float)
@@ -140,3 +142,146 @@ def compute_pitch_distribution_peaks_df(
     )
 
     return grid_cents, density, peak_cents, peak_dens, df_peaks
+
+
+
+
+
+def theoretical_svarasthanas_cents(
+    *,
+    raga: str = "saveri",
+    with_octaves: bool = True,
+) -> np.ndarray:
+    base = np.cumsum(S.RAGAM_SVARAS_CENTS[raga]["intervals_cents"]).astype(float)  # 0..1200
+    if not with_octaves:
+        return base
+    return np.sort(np.concatenate([base - 1200.0, base, base + 1200.0]))
+
+
+def found_svarasthanas_from_kde(
+    df_kde_peaks: pl.DataFrame,
+    *,
+    theoretical_cents: np.ndarray,
+    n_largest: int = 5,
+    threshold_cents: float = 30.0,
+) -> pl.DataFrame:
+    """
+    Map KDE peaks (peak_cents, density) to nearby theoretical svarasthanas within threshold.
+    Keeps top n_largest peaks by density.
+    Returns: columns [source, peak_cents, density, svara_cents, dist_cents]
+    """
+    if df_kde_peaks.is_empty():
+        print("Warning: df_kde_peaks is empty")
+        return pl.DataFrame([])
+
+    if "peak_cents" not in df_kde_peaks.columns or "density" not in df_kde_peaks.columns:
+        raise ValueError("df_kde_peaks must have columns: peak_cents, density")
+
+    top = df_kde_peaks.sort("density", descending=True).head(int(n_largest))
+    peaks = top["peak_cents"].to_numpy().astype(float)
+    dens = top["density"].to_numpy().astype(float)
+
+    rows = []
+    for p, d in zip(peaks, dens):
+        dist = np.abs(theoretical_cents - p)
+        mask = dist <= float(threshold_cents)
+        for s, dd in zip(theoretical_cents[mask], dist[mask]):
+            rows.append({
+                "source": "kde_peaks",
+                "peak_cents": float(p),
+                "density": float(d),
+                "svara_cents": float(s),
+                "dist_cents": float(dd),
+            })
+
+    if not rows:
+        return pl.DataFrame([])
+
+    return pl.DataFrame(rows).sort(["svara_cents", "dist_cents"])
+
+
+def flat_region_svara_proportions(
+    df_pitch: pl.DataFrame,
+    *,
+    time_col: str = S.TIME_COL,
+    pitch_cents_col: str = S.PITCH_COL_CENTS,
+    flat_col: str = S.STABLE_COL,          # "flat_region"
+    flat_id_col: str = "flat_id",
+    theoretical_cents: np.ndarray,
+    threshold_cents: float = 30.0,
+) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """
+    Frame-level:
+      - keep only frames where flat_col==True
+      - for each frame, mark all theoretical svaras within threshold
+    Returns:
+      df_hits: one row per (frame, svara) hit [time, pitch, flat_id, svara_cents, dist_cents]
+      df_props: proportions per flat_id and svara [flat_id, svara_cents, n_frames, duration_sec, proportion]
+    """
+    if flat_col not in df_pitch.columns:
+        raise ValueError(f"Missing {flat_col} in df_pitch")
+    if pitch_cents_col not in df_pitch.columns:
+        raise ValueError(f"Missing {pitch_cents_col} in df_pitch")
+    if time_col not in df_pitch.columns:
+        raise ValueError(f"Missing {time_col} in df_pitch")
+    if flat_id_col not in df_pitch.columns:
+        raise ValueError(f"Missing {flat_id_col} (run add_flat_id first)")
+
+    df_flat = (
+        df_pitch
+        .filter(pl.col(flat_col).fill_null(False) == True)
+        .select([time_col, pitch_cents_col, flat_id_col])
+        .drop_nulls([time_col, pitch_cents_col, flat_id_col])
+        .sort(time_col)
+    )
+    if df_flat.is_empty():
+        return pl.DataFrame([]), pl.DataFrame([])
+
+    t = df_flat[time_col].to_numpy().astype(float)
+    y = df_flat[pitch_cents_col].to_numpy().astype(float)
+    fid = df_flat[flat_id_col].to_numpy()
+
+    rows = []
+    for ti, yi, fidi in zip(t, y, fid):
+        dist = np.abs(theoretical_cents - yi)
+        mask = dist <= float(threshold_cents)
+        for s, dd in zip(theoretical_cents[mask], dist[mask]):
+            rows.append({
+                time_col: float(ti),
+                pitch_cents_col: float(yi),
+                flat_id_col: int(fidi),
+                "source": "flat_regions",
+                "svara_cents": float(s),
+                "dist_cents": float(dd),
+            })
+
+    if not rows:
+        return pl.DataFrame([]), pl.DataFrame([])
+
+    df_hits = pl.DataFrame(rows)
+
+    # duration estimate from time step (robust enough for your 100 Hz streams)
+    dt = np.nanmedian(np.diff(np.unique(t))) if len(np.unique(t)) > 2 else np.nan
+    dt = float(dt) if np.isfinite(dt) and dt > 0 else 0.0
+
+    df_counts = (
+        df_hits
+        .group_by([flat_id_col, "svara_cents"])
+        .agg(pl.len().alias("n_frames"))
+        .with_columns((pl.col("n_frames") * dt).alias("duration_sec"))
+    )
+
+    df_tot = (
+        df_counts
+        .group_by(flat_id_col)
+        .agg(pl.col("n_frames").sum().alias("n_frames_total"))
+    )
+
+    df_props = (
+        df_counts
+        .join(df_tot, on=flat_id_col, how="left")
+        .with_columns((pl.col("n_frames") / pl.col("n_frames_total")).alias("proportion"))
+        .sort([flat_id_col, "proportion"], descending=[False, True])
+    )
+
+    return df_hits, df_props

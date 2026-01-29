@@ -29,6 +29,7 @@ if __name__ == "__main__":
             df_pitch,
             recording_id=recording_id,
             tonic_hz=tonic_hz,
+            
         )
         print(f"  Extracted extrema: {df_peaks.height} events")
 
