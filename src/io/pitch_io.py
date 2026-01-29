@@ -158,8 +158,8 @@ def load_preprocessed_pitch(
             "f0_interpolated",
             "f0_pchip",
             "f0_savgol_p3_w13",
-            "f0_savgol_p3_w27"
-        ]
+            "f0_savgol_p3_w27",
+            ]
 
         for col in pitch_cols:
             if col in df.columns:
@@ -408,3 +408,43 @@ def load_flat_regions(
     df =pl.read_parquet(file_path)
 
     return df
+
+
+
+def save_peaks(
+    df_peaks: pl.DataFrame,
+    recording_id: str,
+    root_dir: str = "data/interim",
+):
+    """
+    data/interim/<recording_id>/peaks/<recording_id>_peaks.parquet
+    """
+    from pathlib import Path
+
+    root_dir = Path(root_dir)
+    out_dir = root_dir / recording_id / "peaks"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    path = out_dir / f"{recording_id}_peaks.parquet"
+    df_peaks.write_parquet(path)
+    return path
+
+
+
+
+
+
+def load_peaks(
+    recording_id: str,
+    root_dir: str = "data/interim",
+) -> pl.DataFrame:
+    """
+    data/interim/<recording_id>/peaks/<recording_id>_peaks.parquet
+    """
+
+    root_dir = Path(root_dir)
+    path = root_dir / recording_id / "peaks" / f"{recording_id}_peaks.parquet"
+    if not path.exists():
+        raise FileNotFoundError(path)
+
+    return pl.read_parquet(path)
