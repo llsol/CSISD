@@ -105,11 +105,20 @@ def add_flat_threshold_segments_to_ax(
         if not (np.isfinite(y[i]) and np.isfinite(y[i + 1])):
             continue
 
-        is_near = (near[i] or near[i + 1])
+        is_flat = bool(flat[i] or flat[i + 1])
+        is_near = bool(near[i] or near[i + 1])   # near ja implica flat, però ho deixem explícit
 
         segments.append([(x[i], y[i]), (x[i + 1], y[i + 1])])
-        widths.append(thick_lw if is_near else base_lw)
-        colors.append("red" if is_near else "gray")
+
+        if is_flat and is_near:
+            widths.append(thick_lw)
+            colors.append("darkred")
+        elif is_flat and (not is_near):
+            widths.append(base_lw)
+            colors.append("red")
+        else:
+            widths.append(base_lw)
+            colors.append("gray")
 
     if segments:
         lc = LineCollection(
