@@ -6,7 +6,7 @@ import polars as pl
 
 def compute_derivatives(
     df: pl.DataFrame,
-    col_in: str = "f0_pchip",
+    col_in: str = "f0_savgol_p3_w13",
     window_length: int = 13,
     polyorder: int = 3,
 ):
