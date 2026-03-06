@@ -102,3 +102,16 @@ RAGAM_SVARAS_CENTS = {
         "intervals_cents": [0, 100, 200, 200, 200, 100, 200, 200],  
     }
 }
+
+
+# List of feature columns to use for autoencoder training
+
+AE_FEATURE_COLUMNS = [
+    "duration_sec",
+    "pitch_median",
+    "pitch_std",
+    "pitch_range",
+    "slope_global",
+    "d1_std",
+    "d2_std",
+]

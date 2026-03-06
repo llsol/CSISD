@@ -1,8 +1,7 @@
 import numpy as np
 import polars as pl
-from src.features.derivatives import compute_derivatives
+from src.features.derivatives import compute_derivative_features, compute_derivatives
 from src.features.basic_features import compute_base_features
-from src.features.derivatives import compute_derivative_features
 from src.annotations.utils import time_str_to_sec
 
 def compute_svara_segment_features(
@@ -40,8 +39,8 @@ def compute_svara_segment_features(
     rows = []
 
     for segment_id, row in enumerate(df_svaras.iter_rows(named=True)):
-        t_start = time_str_to_sec(row[col_begin])
-        t_end = time_str_to_sec(row[col_end])
+        t_start = row[col_begin]
+        t_end = row[col_end]
         if t_end < t_start:
             t_start, t_end = t_end, t_start
 
@@ -56,7 +55,7 @@ def compute_svara_segment_features(
             "svara_label": svara_label,
             "t_start": float(t_start),
             "t_end": float(t_end),
-            "duration_sec": float(t_end - t_start),
+            "duration_annot_sec": float(t_end - t_start),
             "n_frames": int(mask_seg.sum()),
         }
 
