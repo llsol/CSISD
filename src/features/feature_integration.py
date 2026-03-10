@@ -55,7 +55,6 @@ def compute_svara_segment_features(
             "svara_label": svara_label,
             "t_start": float(t_start),
             "t_end": float(t_end),
-            "duration_annot_sec": float(t_end - t_start),
             "n_frames": int(mask_seg.sum()),
         }
 
