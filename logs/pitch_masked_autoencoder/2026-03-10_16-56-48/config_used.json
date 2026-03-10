@@ -1,0 +1,44 @@
+{
+  "search_space": {
+    "window_size": [
+      32
+    ],
+    "stride": [
+      4,
+      8
+    ],
+    "min_mask_len": [
+      4
+    ],
+    "max_mask_len": [
+      6
+    ],
+    "batch_size": [
+      16,
+      32
+    ],
+    "hidden_channels": [
+      32,
+      64
+    ],
+    "dropout": [
+      0.05
+    ],
+    "learning_rate": [
+      0.001
+    ],
+    "num_epochs": [
+      150
+    ]
+  },
+  "seeds": [
+    42,
+    999
+  ],
+  "normalize_per_window": true,
+  "val_ratio": 0.2,
+  "mask_fill_value": 0.0,
+  "use_mask_channel": true,
+  "weight_decay": 1e-05,
+  "experiment_timestamp": "2026-03-10_16-56-48"
+}
