@@ -1,0 +1,19 @@
+{
+  "config_id": 0,
+  "seed": 42,
+  "window_size": 32,
+  "stride": 4,
+  "min_mask_len": 4,
+  "max_mask_len": 5,
+  "batch_size": 16,
+  "hidden_channels": 96,
+  "dropout": 0.05,
+  "learning_rate": 0.0005,
+  "num_epochs": 150,
+  "min_run_len": 32,
+  "best_val_loss": 0.010057769387083896,
+  "best_epoch": 140,
+  "n_windows": 1362,
+  "n_train_windows": 1090,
+  "n_val_windows": 272
+}

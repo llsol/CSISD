@@ -40,6 +40,7 @@ CURRENT_PIECE = "srs_v1_bdn_sav"
 TIME_COL = "time_rel_sec"
 
 # pitch
+PITCH_COL_RAW = "f0_Hz"
 PITCH_COL = "f0_savgol_p3_w13"       
 PITCH_COL_CENTS = "f0_savgol_p3_w13_cents"
 PITCH_COL_HZ = "pitch_hz"
