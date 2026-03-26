@@ -349,17 +349,18 @@ def save_peaks(
 
 
 
-
-
 def load_peaks(
     recording_id: str,
-    root_dir: str = "data/interim",
+    root_dir: Path | str = "data/interim",
 ) -> pl.DataFrame:
     """
-    data/interim/<recording_id>/peaks/<recording_id>_peaks.parquet
+    Load data/interim/<recording_id>/peaks/<recording_id>_peaks.parquet
     """
+    if isinstance(root_dir, str):
+        root_dir = Path(root_dir)
 
-    root_dir = Path(root_dir)
+    root_dir = _resolve_path(root_dir)
+
     path = root_dir / recording_id / "peaks" / f"{recording_id}_peaks.parquet"
     if not path.exists():
         raise FileNotFoundError(path)

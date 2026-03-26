@@ -2,6 +2,17 @@ import polars as pl
 import pandas as pd
 from pathlib import Path
 from src.annotations.utils import time_str_to_sec
+from settings import PROJECT_ROOT
+
+
+
+def _resolve_path(p: Path | str) -> Path:
+    p = Path(p)
+    if p.is_absolute():
+        return p
+    return PROJECT_ROOT / p
+
+
 
 def load_annotations(
     file_path: Path | str,
@@ -16,6 +27,8 @@ def load_annotations(
     if engine != "polars":
         raise NotImplementedError("Només Polars per simplificar.")
 
+    file_path = _resolve_path(file_path)
+    
     if annotation_type == "svara":
         df = pl.read_csv(
             file_path,
