@@ -31,7 +31,9 @@ def run_flat_regions(recording_id: str):
         min_duration_sec=S.MIN_STABLE_DURATION_SEC,
         cent_tolerance=S.TOLERANCE_CENTS,
         d1_threshold=S.D1_THRESHOLD,
-        abs_deriv1_col=getattr(S, "ABS_DERIV1_COL", None),  # opcional per debug
+        abs_deriv1_col=getattr(S, "ABS_DERIV1_COL", None),
+        max_slope_cents_per_sec=S.MAX_SLOPE_CENTS_PER_SEC,
+        max_residual_cents=getattr(S, "MAX_RESIDUAL_CENTS", None),
         verbose=False,
     )
 

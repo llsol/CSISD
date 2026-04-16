@@ -60,8 +60,10 @@ SVARA_END_LABEL_COL = "svara_end_label"
 CANDIDATE_COL = "flat_candidate"
 STABLE_COL = "flat_region"
 D1_THRESHOLD = 1000.0
-MIN_STABLE_DURATION_SEC = 0.05   # o el que vulguis
+MIN_STABLE_DURATION_SEC = 0.080  # 80ms — Viraraghavan et al. ISMIR 2017
 TOLERANCE_CENTS = 30.0
+MAX_SLOPE_CENTS_PER_SEC = 100.0  # 1 semitone/sec — Viraraghavan et al. ISMIR 2017
+MAX_RESIDUAL_CENTS = 25.0        # RMS deviation from best-fit line; None = disabled
 
 # opcional (si vols guardar-ho al parquet per inspecció)
 ABS_DERIV1_COL = "abs_deriv1_cents_per_sec"

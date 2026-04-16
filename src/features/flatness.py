@@ -12,9 +12,13 @@ def extract_flat_regions(
     min_duration_sec: float = 0.150,
     cent_tolerance: float = 10.0,          # tolerance in cents (works for both cents + Hz)
     pitch_unit: str = "cents",             # "cents" or "hz"
-    # --- NEW: candidate from abs(deriv1) ---
+    # --- candidate from abs(deriv1) ---
     d1_threshold: float = 1000.0,          # cents/sec
     abs_deriv1_col: str | None = None,     # e.g. "abs_deriv1_cents_per_sec" to store it
+    # --- slope filter (paper: Viraraghavan et al. ISMIR 2017) ---
+    max_slope_cents_per_sec: float = 100.0, # 100 cents/sec = 1 semitone/sec
+    # --- residuals filter (RMS deviation from best-fit line) ---
+    max_residual_cents: float | None = None,  # None = disabled; e.g. 25.0
     verbose: bool = False,
 ) -> pl.DataFrame:
     """
@@ -164,11 +168,57 @@ def extract_flat_regions(
                 else:
                     break
 
+            # Slope filter: fit a line to the window and reject if slope too steep.
+            # Converts to cents if pitch_unit == "hz" before fitting.
+            win_times   = times[i:j_max + 1]
+            win_pitches = pitches[i:j_max + 1]
+
+            if pitch_unit == "hz":
+                valid_hw = (win_pitches > 0) & np.isfinite(win_pitches)
+                if valid_hw.sum() >= 2:
+                    win_pitches_cents = np.full_like(win_pitches, np.nan)
+                    win_pitches_cents[valid_hw] = 1200.0 * np.log2(
+                        win_pitches[valid_hw] / win_pitches[valid_hw][0]
+                    )
+                else:
+                    win_pitches_cents = win_pitches
+            else:
+                win_pitches_cents = win_pitches
+
+            valid_w = np.isfinite(win_times) & np.isfinite(win_pitches_cents)
+            if valid_w.sum() >= 2:
+                slope, intercept = np.polyfit(win_times[valid_w], win_pitches_cents[valid_w], 1)
+            else:
+                slope, intercept = 0.0, float(np.nanmean(win_pitches_cents))
+
+            if abs(slope) > max_slope_cents_per_sec:
+                if verbose:
+                    print(
+                        f"[✗] {times[i]:.3f}-{times[j_max]:.3f}s rejected | "
+                        f"slope={slope:.1f} cents/s > {max_slope_cents_per_sec}"
+                    )
+                i += 1
+                continue
+
+            if max_residual_cents is not None and valid_w.sum() >= 2:
+                fitted    = slope * win_times[valid_w] + intercept
+                residuals = win_pitches_cents[valid_w] - fitted
+                rms = float(np.sqrt(np.mean(residuals ** 2)))
+                if rms > max_residual_cents:
+                    if verbose:
+                        print(
+                            f"[✗] {times[i]:.3f}-{times[j_max]:.3f}s rejected | "
+                            f"rms={rms:.1f} cents > {max_residual_cents}"
+                        )
+                    i += 1
+                    continue
+
             stable_mask[row_nrs[i:j_max + 1]] = True
             if verbose:
                 print(
                     f"[✔] {times[i]:.3f}-{times[j_max]:.3f}s | "
                     f"range≈{range_in_cents(win_min, win_max):.2f} cents | "
+                    f"slope={slope:.1f} cents/s | "
                     f"n={j_max - i + 1}"
                 )
             i = j_max + 1

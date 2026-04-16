@@ -14,6 +14,15 @@ def _resolve_path(p: Path | str) -> Path:
     return PROJECT_ROOT / p
 
 
+def _recording_path(
+        root_dir: Path | str,
+        recording_id: str,
+        subdir: str,
+        filename: str,
+) -> Path:
+    """Return the canonical path for a per-recording file."""
+    return _resolve_path(root_dir) / recording_id / subdir / filename
+
 
 
 
@@ -30,13 +39,8 @@ def load_pitch_file(
     - If column_names=None, it assumes file has header.
     - If column_names is provided, it treats file as headerless and assigns these names.
     """
-    if isinstance(file_path, str):
-        file_path = Path(file_path)
-    
     file_path = _resolve_path(file_path)
-
     ext = file_path.suffix.lower()
-
 
     if engine == 'polars':
 
@@ -54,7 +58,6 @@ def load_pitch_file(
         else:
             raise ValueError(f"Unsupported file extension: {ext}")
 
-
     elif engine == 'pandas':
 
         if ext == '.parquet':
@@ -65,7 +68,7 @@ def load_pitch_file(
                 df = pd.read_csv(file_path, sep=sep, header=0)
             else:
                 df = pd.read_csv(file_path, sep=sep, header=None, names=column_names)
-        
+
         else:
             raise ValueError(f"Unsupported file extension: {ext}")
 
@@ -73,7 +76,6 @@ def load_pitch_file(
         raise ValueError("Engine must be 'polars' or 'pandas'.")
 
     return df
-
 
 
 
@@ -86,7 +88,6 @@ def save_pitch_file(
 ):
 
     file_path = _resolve_path(file_path)
-
     ext = file_path.suffix.lower()
 
     if engine == 'polars':
@@ -96,10 +97,9 @@ def save_pitch_file(
 
         elif ext == '.tsv':
             df.write_csv(file_path, separator=sep)
-        
+
         else:
             raise ValueError(f"Unsupported file extension: {ext}")
-
 
     elif engine == 'pandas':
 
@@ -120,7 +120,6 @@ def save_pitch_file(
 
 
 
-
 def load_preprocessed_pitch(
         recording_id: str,
         root_dir: Path | str = "data/interim",
@@ -131,17 +130,9 @@ def load_preprocessed_pitch(
     Load a preprocessed pitch parquet for a given recording_id
     from data/interim/<recording_id>/pitch/.
     """
-
-    if isinstance(root_dir, str):
-        root_dir = Path(root_dir)
-
-    root_dir = _resolve_path(root_dir)
-
-    file_path = (
-        root_dir
-        / recording_id
-        / "pitch"
-        / f"{recording_id}_pitch_preprocessed.parquet"
+    file_path = _recording_path(
+        root_dir, recording_id, "pitch",
+        f"{recording_id}_pitch_preprocessed.parquet"
     )
 
     if not file_path.exists():
@@ -159,7 +150,7 @@ def load_preprocessed_pitch(
             "f0_pchip",
             "f0_savgol_p3_w13",
             "f0_savgol_p3_w27",
-            ]
+        ]
 
         for col in pitch_cols:
             if col in df.columns:
@@ -172,6 +163,7 @@ def load_preprocessed_pitch(
                 )
 
     return df
+
 
 
 
@@ -188,18 +180,11 @@ def save_preprocessed_pitch(
 
     Only selected columns are saved based on whether debug is True or False.
     """
-
-    if isinstance(root_dir, str):
-        root_dir = Path(root_dir)
-
-    root_dir = _resolve_path(root_dir)
-
-    # Output directory
-    out_dir = root_dir / recording_id / "pitch"
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    # Output file
-    out_path = out_dir / f"{recording_id}_pitch_preprocessed.parquet"
+    out_path = _recording_path(
+        root_dir, recording_id, "pitch",
+        f"{recording_id}_pitch_preprocessed.parquet"
+    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
 
     production_cols = [
         "time_rel_sec",
@@ -226,7 +211,7 @@ def save_preprocessed_pitch(
     ]
 
     if debug:
-        out_path = out_dir / f"{recording_id}_pitch_preprocessed_debug.parquet"
+        out_path = out_path.parent / f"{recording_id}_pitch_preprocessed_debug.parquet"
         for c in debug_cols:
             if c in df.columns:
                 production_cols.append(c)
@@ -237,13 +222,12 @@ def save_preprocessed_pitch(
     df_out = df_out.with_columns([
         pl.col(pl.Float64).cast(pl.Float32)
     ])
-    # Save parquet
     df_out.write_parquet(out_path)
 
     if create_tsv:
         tsv_path = str(out_path).replace(".parquet", ".tsv")
         df_out.write_csv(tsv_path, separator="\t")
-    
+
     return out_path
 
 
@@ -257,19 +241,11 @@ def save_flat_regions(
     """
     Save pitch + flat_region for plotting / inspection.
     """
-
-    if isinstance(root_dir, str):
-        root_dir = Path(root_dir)
-
-    root_dir = _resolve_path(root_dir)
-
-    out_dir = root_dir / recording_id / "flat_regions"
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    file_path = out_dir / f"{recording_id}_flat_regions.parquet"
-
-
-    # COLUMNS TO SAVE
+    file_path = _recording_path(
+        root_dir, recording_id, "flat_regions",
+        f"{recording_id}_flat_regions.parquet"
+    )
+    file_path.parent.mkdir(parents=True, exist_ok=True)
 
     SAVE_COLS = [
         "f0_Hz",
@@ -277,10 +253,8 @@ def save_flat_regions(
         "f0_pchip",
         "f0_pchip_cents",
         "time_rel_sec",
-        # pitch (tria les que t'interessin per plots)
         "f0_savgol_p3_w13",
         "f0_savgol_p3_w13_cents",
-        # flatness
         "flat_candidate",
         "flat_region",
         "flat_id",
@@ -290,12 +264,9 @@ def save_flat_regions(
     ]
 
     cols_present = [c for c in SAVE_COLS if c in df.columns]
-    df_out = df.select(cols_present)
+    df.select(cols_present).write_parquet(file_path)
 
-    df_out.write_parquet(file_path)
-    
     return file_path
-
 
 
 
@@ -307,42 +278,32 @@ def load_flat_regions(
     """
     Load data/interim/<recording_id>/flat_regions/<recording_id>_flat_regions.parquet
     """
-    if isinstance(root_dir, str):
-        root_dir = Path(root_dir)
-
-    root_dir = _resolve_path(root_dir)
-
-    file_path = (
-        root_dir
-        / recording_id
-        / "flat_regions"
-        / f"{recording_id}_flat_regions.parquet"
+    file_path = _recording_path(
+        root_dir, recording_id, "flat_regions",
+        f"{recording_id}_flat_regions.parquet"
     )
 
     if not file_path.exists():
         raise FileNotFoundError(f"No flat regions file found at {file_path}")
 
-    df =pl.read_parquet(file_path)
+    return pl.read_parquet(file_path)
 
-    return df
 
 
 
 def save_peaks(
     df_peaks: pl.DataFrame,
     recording_id: str,
-    root_dir: str = "data/interim",
-):
+    root_dir: Path | str = "data/interim",
+) -> Path:
     """
     data/interim/<recording_id>/peaks/<recording_id>_peaks.parquet
     """
-    from pathlib import Path
-
-    root_dir = Path(root_dir)
-    out_dir = root_dir / recording_id / "peaks"
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    path = out_dir / f"{recording_id}_peaks.parquet"
+    path = _recording_path(
+        root_dir, recording_id, "peaks",
+        f"{recording_id}_peaks.parquet"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
     df_peaks.write_parquet(path)
     return path
 
@@ -356,12 +317,10 @@ def load_peaks(
     """
     Load data/interim/<recording_id>/peaks/<recording_id>_peaks.parquet
     """
-    if isinstance(root_dir, str):
-        root_dir = Path(root_dir)
-
-    root_dir = _resolve_path(root_dir)
-
-    path = root_dir / recording_id / "peaks" / f"{recording_id}_peaks.parquet"
+    path = _recording_path(
+        root_dir, recording_id, "peaks",
+        f"{recording_id}_peaks.parquet"
+    )
     if not path.exists():
         raise FileNotFoundError(path)
 
