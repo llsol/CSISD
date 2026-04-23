@@ -31,7 +31,7 @@ SARASUDA_TONICS = {
     "srs_v1_vgn_sav": 138.59,
 }
 
-CURRENT_PIECE = "srs_v1_bdn_sav"
+CURRENT_PIECE = "srs_v1_svd_sav"
 
 
 
