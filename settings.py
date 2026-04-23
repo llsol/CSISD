@@ -97,6 +97,40 @@ PREPROCESSED_PITCH_PATH = (
 )
 
 
+# Naming convention mappings (for converting external dataset filenames)
+
+RAGA_CODE = {
+    "saveri": "sav",
+    "sri": "sri",
+    "abhogi": "abh",
+    "begada": "beg",
+    "kalyani": "kal",
+    "mohanam": "moh",
+    "sahana": "sah",
+}
+
+PERFORMER_CODE = {
+    "dharini": "drn",
+    "ramakrishnamurthy": "rkm",
+    "vignesh": "vgn",
+    "prasanna": "psn",
+    "sreevidya": "svd",
+    "badrinarayanan": "bdn",
+}
+
+PIECE_CODE = {
+    "saveri": "srs",
+    "kalyani": "van",
+    "sri": "saa",
+    "sahana": "kar",
+    "mohanam": "nin",
+    "begada": "int",
+    "abhogi": "evv",
+}
+
+DEFAULT_VERSION = "v1"
+
+
 # Dictionary of dictionaries for different ragas
 
 RAGAM_SVARAS_CENTS = {

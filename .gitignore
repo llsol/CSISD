@@ -1,10 +1,12 @@
 
 mock-README.md
+CLAUDE.md
 
 logger.py
 proves.py
 proves.ipynb
 local_path.py
+convert_filenames.py
 
 /auxiliar/*
 /data/*
