@@ -276,42 +276,44 @@ def label_samples_sil_cp_sta(df_svara: pl.DataFrame) -> pl.DataFrame:
 def map_peaks_to_global_rows(
     df_pitch: pl.DataFrame,
     df_peaks: pl.DataFrame,
-) -> dict[int, float]:
+) -> dict[int, tuple[float, str]]:
     """
     Map each refined peak to the nearest global row index in df_pitch.
 
-    We use time_savgol together with value_savgol_cents, because they refer
-    to the same refined extremum location.
+    Returns:
+        {global_row_idx: (value_savgol_cents, extremum_kind)}
+        where extremum_kind is 'max' or 'min'.
     """
     if df_peaks.is_empty():
         return {}
 
     t = df_pitch["time_rel_sec"].to_numpy()
     peak_times = df_peaks["time_savgol"].to_numpy()
-    peak_vals = df_peaks["value_savgol_cents"].to_numpy()
+    peak_vals  = df_peaks["value_savgol_cents"].to_numpy()
+    peak_kinds = df_peaks["extremum_kind"].to_numpy()
 
     out = {}
-    for tp, val in zip(peak_times, peak_vals):
+    for tp, val, kind in zip(peak_times, peak_vals, peak_kinds):
         i = int(np.argmin(np.abs(t - tp)))
-        out[int(df_pitch["row_idx"][i])] = float(val)
+        out[int(df_pitch["row_idx"][i])] = (float(val), str(kind))
 
     return out
 
 
 def restrict_peaks_to_slice(
     df_svara: pl.DataFrame,
-    peak_row_map: dict[int, float],
-) -> dict[int, float]:
+    peak_row_map: dict[int, tuple[float, str]],
+) -> dict[int, tuple[float, str]]:
     """
     Restrict global peaks to one svara slice and convert them to local row positions.
 
     Returns:
-        {local_row_idx: value_savgol_cents}
+        {local_row_idx: (value_savgol_cents, extremum_kind)}
     """
     global_rows = df_svara["row_idx"].to_list()
     global_to_local = {g: i for i, g in enumerate(global_rows)}
 
-    out: dict[int, float] = {}
+    out: dict[int, tuple[float, str]] = {}
     for g, val in peak_row_map.items():
         if g in global_to_local:
             out[global_to_local[g]] = val
@@ -322,7 +324,7 @@ def restrict_peaks_to_slice(
 
 def build_segments_for_one_svara(
     df_svara: pl.DataFrame,
-    local_peak_map: dict[int, float],
+    local_peak_map: dict[int, tuple[float, str]],
 ) -> list[dict]:
     """
     Build structural segments for one svara.
@@ -410,7 +412,7 @@ def assign_segment_cents(
     df_svara: pl.DataFrame,
     df_full: pl.DataFrame,
     tau_init_sil: float,
-    local_peak_map: dict[int, float],
+    local_peak_map: dict[int, tuple[float, str]],
 ) -> list[dict]:
     """
     Assign one representative cents value to each segment.
@@ -501,7 +503,7 @@ def assign_segment_cents(
 
             # If this STA starts on a peak, use the peak raw-cents value
             if s in local_peak_map:
-                seg["cents"] = float(local_peak_map[s])
+                seg["cents"] = float(local_peak_map[s][0])
                 continue
 
             # Initial STA -> first value
