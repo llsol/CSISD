@@ -6,9 +6,11 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
-DATA_CORPUS = PROJECT_ROOT / "data" / "corpus"
-DATA_INTERIM = PROJECT_ROOT / "data" / "interim"
+DATA_CORPUS    = PROJECT_ROOT / "data" / "corpus"
+DATA_INTERIM   = PROJECT_ROOT / "data" / "interim"
 DATA_PROCESSED = PROJECT_ROOT / "data" / "processed"
+
+SSD_ROOT = Path("/media/lluis/Extreme SSD")
 
 
 
