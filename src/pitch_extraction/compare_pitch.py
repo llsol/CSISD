@@ -46,8 +46,17 @@ VOICED_MIN_HZ  = 50.0
 TONIC_FALLBACK = 200.0
 
 EXTRACTOR_STYLES = {
-    "ftanet":  ("FTA-Net",  "steelblue"),
-    "swiftf0": ("SwiftF0",  "tomato"),
+    "ftanet":        ("FTA-Net",          "steelblue"),
+    "swiftf0":       ("SwiftF0",          "tomato"),
+    "swiftf0ft":     ("SwiftF0-ft",       "darkorange"),
+    "swiftf0scratch":("SwiftF0-scratch",  "mediumseagreen"),
+}
+
+# Subdirectory under data/interim/{id}/ where each extractor's raw files live.
+# Extractors not listed here default to "pitch_raw".
+EXTRACTOR_PITCH_DIRS: dict[str, str] = {
+    "swiftf0ft":      "pitch_raw_swiftf0ft",
+    "swiftf0scratch": "pitch_raw_swiftf0scratch",
 }
 
 SOURCE_LABELS = {
@@ -160,9 +169,10 @@ def compare(
     extractor_a: str = "ftanet",
     extractor_b: str = "swiftf0",
 ):
-    pitch_dir = settings.DATA_INTERIM / recording_id / "pitch_raw"
-    path_a = pitch_dir / f"{recording_id}_{source}_{extractor_a}_raw.npy"
-    path_b = pitch_dir / f"{recording_id}_{source}_{extractor_b}_raw.npy"
+    dir_a  = EXTRACTOR_PITCH_DIRS.get(extractor_a, "pitch_raw")
+    dir_b  = EXTRACTOR_PITCH_DIRS.get(extractor_b, "pitch_raw")
+    path_a = settings.DATA_INTERIM / recording_id / dir_a / f"{recording_id}_{source}_{extractor_a}_raw.npy"
+    path_b = settings.DATA_INTERIM / recording_id / dir_b / f"{recording_id}_{source}_{extractor_b}_raw.npy"
 
     label_a, color_a = EXTRACTOR_STYLES.get(extractor_a, (extractor_a, "steelblue"))
     label_b, color_b = EXTRACTOR_STYLES.get(extractor_b, (extractor_b, "tomato"))
