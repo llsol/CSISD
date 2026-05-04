@@ -77,15 +77,15 @@ def top_divergence_regions(
     return selected
 
 
-def compare(recording_id: str):
+def compare(recording_id: str, suffix_b: str = "unet"):
     pitch_dir = settings.DATA_INTERIM / recording_id / "pitch_raw"
-    orig_path = pitch_dir / f"{recording_id}_ftanet_raw.npy"
-    unet_path = pitch_dir / f"{recording_id}_unet_ftanet_raw.npy"
+    orig_path = pitch_dir / f"{recording_id}_reproduction_ftanet_raw.npy"
+    unet_path = pitch_dir / f"{recording_id}_{suffix_b}_ftanet_raw.npy"
 
     if not orig_path.exists():
-        raise FileNotFoundError(f"Original pitch not found: {orig_path}")
+        raise FileNotFoundError(f"Reproduction pitch not found: {orig_path}")
     if not unet_path.exists():
-        raise FileNotFoundError(f"U-Net pitch not found: {unet_path}\nRun ftanet_predict with --unet first.")
+        raise FileNotFoundError(f"Pitch not found: {unet_path}\nRun ftanet_predict with --{suffix_b} first.")
 
     orig = np.load(orig_path)   # (N, 2)
     unet = np.load(unet_path)   # (N, 2)
@@ -107,6 +107,8 @@ def compare(recording_id: str):
 
     diff = np.where(both_voiced, cents_unet - cents_orig, np.nan)
 
+    sep_label = {"unet": "U-Net", "as": "BS-RoFormer"}.get(suffix_b, suffix_b)
+
     # Stats
     mae  = np.nanmean(np.abs(diff))
     bias = np.nanmean(diff)
@@ -120,24 +122,35 @@ def compare(recording_id: str):
     print(f"Frames    : {n:,}  ({time[-1]:.1f} s)")
     print(f"Both voiced   : {pct_both:.1f}%")
     print(f"Orig only     : {pct_orig_only:.1f}%")
-    print(f"U-Net only    : {pct_unet_only:.1f}%")
+    print(f"{sep_label} only : {pct_unet_only:.1f}%")
     print(f"MAE (cents)   : {mae:.1f}")
-    print(f"Bias (cents)  : {bias:+.1f}  (U-Net − original)")
+    print(f"Bias (cents)  : {bias:+.1f}  ({sep_label} − original)")
     print(f"{'─'*55}\n")
 
     regions = top_divergence_regions(time, diff, TOP_N_REGIONS, REGION_SEC)
 
+    orig_only_cents = cents_orig[voiced_orig & ~voiced_unet]
+    unet_only_cents = cents_unet[~voiced_orig & voiced_unet]
+
     # ── plots ─────────────────────────────────────────────────────────────────
-    fig, axes = plt.subplots(3, 1, figsize=(16, 10), sharex=True)
-    fig.suptitle(f"FTA-Net comparison — {recording_id}  (tonic={tonic:.1f} Hz)", fontsize=13)
+    fig = plt.figure(figsize=(18, 11))
+    fig.suptitle(f"FTA-Net comparison — {recording_id}  [{sep_label}]  (tonic={tonic:.1f} Hz)", fontsize=13)
+
+    gs      = fig.add_gridspec(3, 2, width_ratios=[4, 1], hspace=0.35, wspace=0.08)
+    ax0     = fig.add_subplot(gs[0, 0])
+    ax1     = fig.add_subplot(gs[1, 0], sharex=ax0)
+    ax2     = fig.add_subplot(gs[2, 0], sharex=ax0)
+    ax_hist = fig.add_subplot(gs[:, 1])   # histogram spanning all rows
+
+    axes = [ax0, ax1, ax2]
 
     # 1. Pitch curves
     ax = axes[0]
     ax.plot(time, cents_orig, lw=0.6, color="steelblue", alpha=0.8, label="Original")
-    ax.plot(time, cents_unet, lw=0.6, color="tomato",    alpha=0.8, label="U-Net voice")
+    ax.plot(time, cents_unet, lw=0.6, color="tomato",    alpha=0.8, label=f"{sep_label} voice")
     ax.set_ylabel("Cents re tonic")
     ax.legend(loc="upper right", fontsize=8)
-    ax.set_title("Pitch curves")
+    ax.set_title(f"Pitch curves — original vs {sep_label}  [{recording_id}]")
 
     # 2. Absolute difference
     ax = axes[1]
@@ -145,18 +158,18 @@ def compare(recording_id: str):
     ax.axhline(mae, color="purple", lw=1, ls="--", label=f"MAE={mae:.1f} ¢")
     ax.set_ylabel("|Δ| cents")
     ax.legend(loc="upper right", fontsize=8)
-    ax.set_title("Absolute pitch difference (voiced frames only)")
+    ax.set_title(f"|Δ| pitch — original vs {sep_label}  (both-voiced frames)")
 
     # 3. Signed difference
     ax = axes[2]
-    ax.fill_between(time, 0, diff, where=diff > 0, color="tomato",   alpha=0.6, label="U-Net higher")
-    ax.fill_between(time, 0, diff, where=diff < 0, color="steelblue", alpha=0.6, label="U-Net lower")
+    ax.fill_between(time, 0, diff, where=diff > 0, color="tomato",   alpha=0.6, label=f"{sep_label} higher")
+    ax.fill_between(time, 0, diff, where=diff < 0, color="steelblue", alpha=0.6, label=f"{sep_label} lower")
     ax.axhline(0,    color="black",  lw=0.8)
     ax.axhline(bias, color="purple", lw=1, ls="--", label=f"bias={bias:+.1f} ¢")
     ax.set_ylabel("Δ cents")
     ax.set_xlabel("Time (s)")
     ax.legend(loc="upper right", fontsize=8)
-    ax.set_title("Signed difference (U-Net − original)")
+    ax.set_title(f"Signed difference ({sep_label} − original)")
 
     # Highlight top-N regions across all axes
     colors = plt.cm.autumn(np.linspace(0.2, 0.8, len(regions)))
@@ -173,13 +186,42 @@ def compare(recording_id: str):
             fontsize=7, ha="center", color="purple",
         )
 
+    # 4. Histogram of exclusive voiced regions
+    bins = np.arange(-1200, 2401, 50)
+    if len(orig_only_cents):
+        ax_hist.barh(
+            bins[:-1], np.histogram(orig_only_cents, bins=bins)[0],
+            height=48, color="steelblue", alpha=0.7,
+            label=f"Orig only ({pct_orig_only:.1f}%)",
+        )
+    if len(unet_only_cents):
+        ax_hist.barh(
+            bins[:-1], -np.histogram(unet_only_cents, bins=bins)[0],
+            height=48, color="tomato", alpha=0.7,
+            label=f"{sep_label} only ({pct_unet_only:.1f}%)",
+        )
+    ax_hist.axhline(0, color="black", lw=0.5)
+    ax_hist.axvline(0, color="black", lw=0.8)
+    ax_hist.set_xlabel(f"Frame count  (← {sep_label}   Orig →)")
+    ax_hist.set_ylabel("Cents re tonic")
+    ax_hist.legend(fontsize=8, loc="upper right")
+    ax_hist.set_title("Pitch distribution\nexclusive voiced frames", fontsize=9)
+
     plt.tight_layout()
     plt.show()
 
 
 def main():
-    recording_id = sys.argv[1] if len(sys.argv) > 1 else settings.CURRENT_PIECE
-    compare(recording_id)
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("recordings", nargs="*",
+                        help="Recording IDs (default: all SARASUDA_VARNAM)")
+    parser.add_argument("--suffix", default="unet",
+                        help="Suffix of the separated pitch to compare against (unet, as). Default: unet")
+    args = parser.parse_args()
+    recordings = args.recordings or settings.SARASUDA_VARNAM
+    for recording_id in recordings:
+        compare(recording_id, suffix_b=args.suffix)
 
 
 if __name__ == "__main__":

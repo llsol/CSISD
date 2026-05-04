@@ -35,7 +35,7 @@ import torch
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 
-import settings
+import settings as S
 from src.source_separation.unet import UNetSmall
 
 # Must match training hyperparameters
@@ -45,12 +45,18 @@ HOP_LENGTH   = 256
 PATCH_FRAMES = 128
 BASE         = 32
 
-DEFAULT_CHECKPOINT = settings.DATA_INTERIM / "source_separation" / "checkpoint_best.pt"
-OUT_ROOT           = settings.DATA_INTERIM / "source_separation" / "separated"
+SEP_DIR = S.DATA_INTERIM / "source_separation"
+
+def _default_checkpoint() -> Path:
+    runs = sorted(SEP_DIR.glob("run_*"))
+    if runs:
+        return runs[-1] / "best.pt"
+    return SEP_DIR / "checkpoint_best.pt"   # legacy fallback
+OUT_ROOT           = S.DATA_INTERIM / "source_separation" / "separated"
 
 
 def _find_audio(recording_id: str) -> Path:
-    audio_dir = settings.DATA_CORPUS / recording_id / "audio"
+    audio_dir = S.DATA_CORPUS / recording_id / "audio"
     for ext in ("wav", "mp3", "flac", "ogg"):
         candidates = list(audio_dir.glob(f"*.{ext}"))
         if candidates:
@@ -60,7 +66,15 @@ def _find_audio(recording_id: str) -> Path:
 
 def _load_model(checkpoint_path: Path, device: torch.device) -> UNetSmall:
     model = UNetSmall(in_channels=1, out_channels=2, base=BASE).to(device)
-    model.load_state_dict(torch.load(checkpoint_path, map_location=device))
+    raw = torch.load(checkpoint_path, map_location=device)
+    # Full checkpoint (train_unet saves optimizer etc.) vs bare state dict
+    state_dict = raw["model_state_dict"] if isinstance(raw, dict) and "model_state_dict" in raw else raw
+    model.load_state_dict(state_dict)
+    if isinstance(raw, dict):
+        epoch = raw.get("epoch", "?")
+        run   = raw.get("run_id", "?")
+        val   = raw.get("val_loss") or raw.get("best_val")
+        print(f"  run={run}  epoch={epoch}  val_loss={val}")
     model.eval()
     return model
 
@@ -132,8 +146,8 @@ def main():
     group.add_argument("--recordings", nargs="+", metavar="ID",
                        help="One or more recording IDs (e.g. srs_v1_rkm_sav)")
     group.add_argument("--all", action="store_true",
-                       help="Process all recordings defined in settings.SARASUDA_VARNAM")
-    parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT)
+                       help="Process all recordings defined in S.SARASUDA_VARNAM")
+    parser.add_argument("--checkpoint", type=Path, default=_default_checkpoint())
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -142,7 +156,7 @@ def main():
 
     model = _load_model(args.checkpoint, device)
 
-    recordings = settings.SARASUDA_VARNAM if args.all else args.recordings
+    recordings = S.SARASUDA_VARNAM if args.all else args.recordings
     print(f"Processing {len(recordings)} recording(s)...\n")
 
     for rec_id in recordings:

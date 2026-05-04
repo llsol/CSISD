@@ -9,8 +9,10 @@ Data sources:
     settings.SSD_ROOT/**/Audio-Multitracks-Clean/tanpura.wav
 
 Saved checkpoints:
-    data/interim/source_separation/checkpoint_best.pt   (model state dict only)
-    data/interim/source_separation/checkpoint_last.pt   (full state for resuming)
+    data/interim/source_separation/checkpoint_best.pt          (best val, model state dict only)
+    data/interim/source_separation/checkpoint_last.pt          (last epoch, full state for resuming)
+    data/interim/source_separation/run_001/epoch_001.pt        (one per epoch per run, never overwritten)
+    data/interim/source_separation/run_002/epoch_001.pt        (...)
 
 Sample log:
     data/interim/source_separation/sample_log.parquet
@@ -49,7 +51,7 @@ BATCH_SIZE       = 8
 EPOCHS           = 40         # 20 @ LR + 20 @ LR/10 (paper schedule)
 LR               = 1e-3
 VAL_SPLIT        = 0.15
-PATCHES_PER_PAIR = 200
+PATCHES_PER_PAIR = 300
 
 BASE  = 32
 ALPHA = 0.5   # equal weight: both sources are peak-normalised before mixing
@@ -58,6 +60,11 @@ CLEAN_SUBDIR     = "Audio-Multitracks-Clean"
 CONCERT          = None    # None = all concerts on SSD
 USE_PITCH_SHIFT  = True    # set False to bypass pitch augmentation entirely
 OUT_DIR          = settings.DATA_INTERIM / "source_separation"
+
+# Tonic filter: only use pieces whose detected tonic falls in [TONIC_MIN, TONIC_MAX].
+# Shift range normalises each piece toward the midpoint, keeping artefacts minimal.
+TONIC_MIN = 97.6   # Hz (inclusive)
+TONIC_MAX = 110.4  # Hz (inclusive)
 # -----------------------------------------------------------------------
 
 
@@ -71,19 +78,17 @@ def detect_tonic(tanpura_path: Path, sr: int = 22050) -> float:
 
 def shift_range_for_tonic(tonic_hz: float) -> tuple[float, float]:
     """
-    Return (shift_min, shift_max) in semitones so that all tonic groups
-    together cover C2–C3 in three equal 4-semitone bands:
-
-        C2–E2   (65.4–82.4 Hz)  →  lowest group   → shift [0,   +4]
-        E2–G#2  (82.4–103.8 Hz) →  middle group   → shift [-3,  +1]
-        G#2–C3  (103.8–130.8 Hz)→  highest group  → shift [-1,  +3]
+    Shift each piece toward the midpoint of [TONIC_MIN, TONIC_MAX].
+    Pieces below midpoint shift up; pieces above shift down.
+    Maximum shift is always < 1 semitone within this narrow band.
     """
-    if tonic_hz < 82.4:     # C2 group
-        return 0.0, 4.0
-    elif tonic_hz < 103.8:  # G2 group (E2–G#2 band)
-        return -3.0, 1.0
-    else:                   # A2 group (G#2–C3 band)
-        return -1.0, 3.0
+    midpoint = (TONIC_MIN + TONIC_MAX) / 2.0
+    if tonic_hz <= midpoint:
+        shift_max = 12.0 * np.log2(midpoint / tonic_hz)
+        return 0.0, round(shift_max, 3)
+    else:
+        shift_min = 12.0 * np.log2(midpoint / tonic_hz)  # negative
+        return round(shift_min, 3), 0.0
 
 
 def no_shift(_: float) -> tuple[float, float]:
@@ -107,11 +112,14 @@ def find_pairs(ssd_root: Path, concert: str | None = None) -> list[tuple[Path, P
         tanpura_file = voice_file.parent / "tanpura.wav"
         if not tanpura_file.exists():
             continue
-        tonic          = detect_tonic(tanpura_file, sr=SR)
+        tonic = detect_tonic(tanpura_file, sr=SR)
+        if not (TONIC_MIN <= tonic <= TONIC_MAX):
+            print(f"  {voice_file.parts[-3]:<35}  tonic={tonic:.1f} Hz  [SKIPPED — outside [{TONIC_MIN}, {TONIC_MAX}] Hz]")
+            continue
         shift_min, shift_max = shift_fn(tonic)
         pairs.append((voice_file, tanpura_file, shift_min, shift_max))
         print(f"  {voice_file.parts[-3]:<35}  tonic={tonic:.1f} Hz  "
-              f"shift=[{shift_min:+.1f}, {shift_max:+.1f}] st")
+              f"shift=[{shift_min:+.3f}, {shift_max:+.3f}] st")
 
     return pairs
 
@@ -197,20 +205,36 @@ def main():
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     best_val    = float("inf")
-    best_path   = OUT_DIR / "checkpoint_best.pt"
-    last_path   = OUT_DIR / "checkpoint_last.pt"
     start_epoch = 1
     all_logs: list[dict] = []
 
-    # Resume from last checkpoint if available
-    if last_path.exists():
+    # Resume from the last checkpoint of the most recent run (only if incomplete)
+    existing_runs = sorted(OUT_DIR.glob("run_*"))
+    last_path = (existing_runs[-1] / "last.pt") if existing_runs else None
+    resumed = False
+
+    if last_path and last_path.exists():
         ckpt = torch.load(last_path, map_location=device)
-        model.load_state_dict(ckpt["model_state_dict"])
-        optimizer.load_state_dict(ckpt["optimizer_state_dict"])
-        scheduler.load_state_dict(ckpt["scheduler_state_dict"])
-        best_val    = ckpt["best_val"]
-        start_epoch = ckpt["epoch"] + 1
-        print(f"Resumed from epoch {ckpt['epoch']}  (best_val={best_val:.4f})")
+        if ckpt["epoch"] < EPOCHS:
+            model.load_state_dict(ckpt["model_state_dict"])
+            optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+            scheduler.load_state_dict(ckpt["scheduler_state_dict"])
+            best_val    = ckpt["best_val"]
+            start_epoch = ckpt["epoch"] + 1
+            run_id      = ckpt.get("run_id", len(existing_runs))
+            resumed     = True
+            print(f"Resumed from epoch {ckpt['epoch']}  (best_val={best_val:.4f}  run={run_id:03d})")
+        else:
+            print(f"Run {ckpt.get('run_id', '?')} already complete — starting new run.")
+
+    if not resumed:
+        run_id = len(existing_runs) + 1
+
+    run_dir = OUT_DIR / f"run_{run_id:03d}"
+    run_dir.mkdir(exist_ok=True)
+    best_path = run_dir / "best.pt"
+    last_path = run_dir / "last.pt"
+    print(f"Run directory: {run_dir}")
 
     for epoch in range(start_epoch, EPOCHS + 1):
         dataset.current_epoch = epoch
@@ -231,14 +255,21 @@ def main():
             torch.save(model.state_dict(), best_path)
             flag = "  <- best"
 
-        # Full checkpoint for resuming (saved every epoch)
-        torch.save({
+        # Per-epoch checkpoint (never overwritten)
+        epoch_ckpt = {
             "epoch":                epoch,
+            "run_id":               run_id,
             "model_state_dict":     model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "scheduler_state_dict": scheduler.state_dict(),
+            "train_loss":           train_loss,
+            "val_loss":             val_loss,
             "best_val":             best_val,
-        }, last_path)
+        }
+        torch.save(epoch_ckpt, run_dir / f"epoch_{epoch:03d}.pt")
+
+        # Overwrite last checkpoint for resuming
+        torch.save(epoch_ckpt, last_path)
 
         print(f"Epoch {epoch:3d}/{EPOCHS}  train={train_loss:.4f}  val={val_loss:.4f}  "
               f"lr={lr_now:.2e}  {elapsed:.0f}s{flag}")

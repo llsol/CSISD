@@ -66,9 +66,14 @@ def main():
         default=settings.CURRENT_PIECE,
         help=f"Recording ID (default: {settings.CURRENT_PIECE})",
     )
-    parser.add_argument(
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument(
         "--unet", action="store_true",
-        help="Use U-Net separated voice instead of corpus MP3.",
+        help="Use U-Net separated voice.",
+    )
+    source.add_argument(
+        "--as", dest="as_model", action="store_true",
+        help="Use BS-RoFormer (audio-separator) separated voice.",
     )
     args = parser.parse_args()
 
@@ -78,6 +83,12 @@ def main():
             / args.recording_id / f"{args.recording_id}_unet_voice.wav"
         )
         suffix = "unet"
+    elif args.as_model:
+        audio_path = (
+            settings.DATA_INTERIM / "source_separation_as" / "separated"
+            / args.recording_id / f"{args.recording_id}_as_voice.wav"
+        )
+        suffix = "as"
     else:
         audio_path = (
             settings.DATA_CORPUS / args.recording_id / "audio"

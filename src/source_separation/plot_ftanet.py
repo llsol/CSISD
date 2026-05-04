@@ -39,9 +39,16 @@ def hz_to_cents(f0_hz: np.ndarray, tonic_hz: float) -> np.ndarray:
     return out
 
 
-def plot_pitch(recording_id: str, unet: bool):
+SOURCE_LABELS = {
+    "original":   ("Original",       "steelblue"),
+    "unet":       ("U-Net voice",    "tomato"),
+    "as":         ("BS-RoFormer",    "seagreen"),
+}
+
+
+def plot_pitch(recording_id: str, source: str):
     pitch_dir = settings.DATA_INTERIM / recording_id / "pitch_raw"
-    suffix    = "unet_ftanet" if unet else "ftanet"
+    suffix    = "ftanet" if source == "original" else f"{source}_ftanet"
     npy_path  = pitch_dir / f"{recording_id}_{suffix}_raw.npy"
 
     if not npy_path.exists():
@@ -53,28 +60,35 @@ def plot_pitch(recording_id: str, unet: bool):
     tonic  = settings.SARASUDA_TONICS.get(recording_id, TONIC_FALLBACK)
     cents  = hz_to_cents(f0_hz, tonic)
 
-    voiced_pct = np.isfinite(cents).mean() * 100
-    label      = "U-Net voice" if unet else "Original"
+    voiced_pct         = np.isfinite(cents).mean() * 100
+    label, color       = SOURCE_LABELS.get(source, (source, "slategray"))
 
     fig, ax = plt.subplots(figsize=(16, 4))
-    ax.plot(time, cents, lw=0.5, color="steelblue" if not unet else "tomato", alpha=0.85)
+    ax.plot(time, cents, lw=0.5, color=color, alpha=0.85)
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("Cents re tonic")
     ax.set_title(f"FTA-Net pitch — {recording_id} [{label}]  "
                  f"(tonic={tonic:.1f} Hz, voiced={voiced_pct:.1f}%)")
     ax.grid(axis="y", lw=0.4, alpha=0.4)
     plt.tight_layout()
-
     plt.show()
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("recording_id", nargs="?", default=settings.CURRENT_PIECE)
-    parser.add_argument("--unet", action="store_true",
-                        help="Plot U-Net separated voice pitch instead of original")
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--unet", action="store_true", help="Plot U-Net separated voice pitch")
+    source.add_argument("--as",   dest="as_model", action="store_true", help="Plot BS-RoFormer separated voice pitch")
     args = parser.parse_args()
-    plot_pitch(args.recording_id, args.unet)
+
+    if args.unet:
+        src = "unet"
+    elif args.as_model:
+        src = "as"
+    else:
+        src = "original"
+    plot_pitch(args.recording_id, src)
 
 
 if __name__ == "__main__":

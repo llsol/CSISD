@@ -11,6 +11,8 @@ DATA_INTERIM   = PROJECT_ROOT / "data" / "interim"
 DATA_PROCESSED = PROJECT_ROOT / "data" / "processed"
 
 SSD_ROOT = Path("/media/lluis/Extreme SSD")
+SCMS_ROOT = DATA_CORPUS / "scms" 
+
 
 
 
@@ -33,7 +35,7 @@ SARASUDA_TONICS = {
     "srs_v1_vgn_sav": 138.59,
 }
 
-CURRENT_PIECE = "srs_v1_svd_sav"
+CURRENT_PIECE = "srs_v1_bdn_sav"
 
 
 
