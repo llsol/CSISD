@@ -5,16 +5,16 @@ Separates voice and tanpura from recordings in data/corpus/.
 
 Usage:
     # Single recording:
-    python -m src.source_separation.separate --recordings srs_v1_rkm_sav
+    python -m src.source_separation.unet.separate --recordings srs_v1_rkm_sav
 
     # Multiple recordings:
-    python -m src.source_separation.separate --recordings srs_v1_rkm_sav srs_v1_svd_sav
+    python -m src.source_separation.unet.separate --recordings srs_v1_rkm_sav srs_v1_svd_sav
 
     # All recordings defined in settings.py:
-    python -m src.source_separation.separate --all
+    python -m src.source_separation.unet.separate --all
 
     # Custom checkpoint:
-    python -m src.source_separation.separate --all --checkpoint data/interim/source_separation/checkpoint_best.pt
+    python -m src.source_separation.unet.separate --all --checkpoint data/interim/source_separation/checkpoint_best.pt
 
 Outputs:
     data/interim/source_separation/separated/{recording_id}/{recording_id}_unet_voice.wav
@@ -36,7 +36,7 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 
 import settings as S
-from src.source_separation.unet import UNetSmall
+from src.source_separation.unet.model import UNetSmall
 
 # Must match training hyperparameters
 SR           = 22050

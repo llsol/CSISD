@@ -1,21 +1,24 @@
 """
-Compare two pitch extractors on the same audio source.
+Compare two pitch extractors (or sources) on a Carnatic recording.
 
 Usage:
-    # FTA-Net vs SwiftF0 (U-Net separated voice, all SARASUDA_VARNAM):
-    python -m src.pitch_extraction.compare_pitch --all
+    # Same extractor, different sources (replaces compare_ftanet.py):
+    python -m src.pitch_extraction.compare_pitch srs_v1_svd_sav \\
+        --extractor-a ftanet --extractor-b ftanet --source-a original --source-b as
 
-    # A single recording, original audio:
-    python -m src.pitch_extraction.compare_pitch srs_v1_svd_sav --source original
+    # Different extractors, same source:
+    python -m src.pitch_extraction.compare_pitch srs_v1_svd_sav \\
+        --extractor-a ftanet --extractor-b swiftf0ft --source as
 
-    # BS-RoFormer separated voice:
-    python -m src.pitch_extraction.compare_pitch srs_v1_svd_sav --source as
+    # Any combination:
+    python -m src.pitch_extraction.compare_pitch srs_v1_svd_sav \\
+        --extractor-a ftanet --source-a original --extractor-b swiftf0ft --source-b as
 
-    # Custom extractor pair:
-    python -m src.pitch_extraction.compare_pitch srs_v1_svd_sav --extractor-a ftanet --extractor-b swiftf0 --source unet
+    # All SARASUDA_VARNAM:
+    python -m src.pitch_extraction.compare_pitch --all --source as
 
 Reads:
-    data/interim/{id}/pitch_raw/{id}_{source}_{extractor}_raw.npy
+    data/interim/{id}/{dir}/{id}_{source}_{extractor}_raw.npy
 
 Shows:
     1. Both pitch curves overlaid (cents re tonic)
@@ -165,30 +168,46 @@ def _top_divergence_regions(
 
 def compare(
     recording_id: str,
-    source: str = "unet",
+    source_a: str = "unet",
+    source_b: str | None = None,
     extractor_a: str = "ftanet",
     extractor_b: str = "swiftf0",
 ):
+    if source_b is None:
+        source_b = source_a
+
     dir_a  = EXTRACTOR_PITCH_DIRS.get(extractor_a, "pitch_raw")
     dir_b  = EXTRACTOR_PITCH_DIRS.get(extractor_b, "pitch_raw")
-    path_a = settings.DATA_INTERIM / recording_id / dir_a / f"{recording_id}_{source}_{extractor_a}_raw.npy"
-    path_b = settings.DATA_INTERIM / recording_id / dir_b / f"{recording_id}_{source}_{extractor_b}_raw.npy"
+    path_a = settings.DATA_INTERIM / recording_id / dir_a / f"{recording_id}_{source_a}_{extractor_a}_raw.npy"
+    path_b = settings.DATA_INTERIM / recording_id / dir_b / f"{recording_id}_{source_b}_{extractor_b}_raw.npy"
 
     label_a, color_a = EXTRACTOR_STYLES.get(extractor_a, (extractor_a, "steelblue"))
     label_b, color_b = EXTRACTOR_STYLES.get(extractor_b, (extractor_b, "tomato"))
-    source_label     = SOURCE_LABELS.get(source, source)
+
+    if source_a == source_b:
+        source_label = SOURCE_LABELS.get(source_a, source_a)
+        label_a_full = label_a
+        label_b_full = label_b
+    else:
+        source_label = f"{SOURCE_LABELS.get(source_a, source_a)} vs {SOURCE_LABELS.get(source_b, source_b)}"
+        label_a_full = f"{label_a} / {SOURCE_LABELS.get(source_a, source_a)}"
+        label_b_full = f"{label_b} / {SOURCE_LABELS.get(source_b, source_b)}"
+        label_a      = label_a_full
+        label_b      = label_b_full
 
     if not path_a.exists():
         raise FileNotFoundError(
             f"{label_a} pitch not found: {path_a}\n"
-            f"Run: python -m src.source_separation.ftanet_predict --{source}"
+            f"Run: python -m src.pitch_extraction.ftanet_predict --{source_a}"
             if extractor_a == "ftanet" else
-            f"Run: python -m src.pitch_extraction.swiftf0_predict --{source}"
+            f"Run: python -m src.pitch_extraction.swiftf0_predict --{source_a}"
         )
     if not path_b.exists():
         raise FileNotFoundError(
             f"{label_b} pitch not found: {path_b}\n"
-            f"Run: python -m src.pitch_extraction.swiftf0_predict --{source}"
+            f"Run: python -m src.pitch_extraction.ftanet_predict --{source_b}"
+            if extractor_b == "ftanet" else
+            f"Run: python -m src.pitch_extraction.swiftf0_predict --{source_b}"
         )
 
     data_a = np.load(path_a)
@@ -341,12 +360,19 @@ def main():
     parser.add_argument("--all", action="store_true",
                         help="Process all recordings in settings.SARASUDA_VARNAM")
     parser.add_argument("--source", default="unet",
-                        help="Audio source: original | unet | as  (default: unet)")
+                        help="Audio source for both A and B: original | unet | as  (default: unet)")
+    parser.add_argument("--source-a", default=None,
+                        help="Audio source for extractor A (overrides --source)")
+    parser.add_argument("--source-b", default=None,
+                        help="Audio source for extractor B (overrides --source)")
     parser.add_argument("--extractor-a", default="ftanet",
-                        help="First extractor suffix (default: ftanet)")
+                        help="First extractor (default: ftanet)")
     parser.add_argument("--extractor-b", default="swiftf0",
-                        help="Second extractor suffix (default: swiftf0)")
+                        help="Second extractor (default: swiftf0)")
     args = parser.parse_args()
+
+    sa = args.source_a or args.source
+    sb = args.source_b or args.source
 
     if args.all:
         recordings = settings.SARASUDA_VARNAM
@@ -358,7 +384,8 @@ def main():
     for rec_id in recordings:
         compare(
             rec_id,
-            source=args.source,
+            source_a=sa,
+            source_b=sb,
             extractor_a=args.extractor_a,
             extractor_b=args.extractor_b,
         )

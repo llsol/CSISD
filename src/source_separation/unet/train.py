@@ -2,7 +2,7 @@
 Training loop for the Spectrogram-Channels U-Net (Oh et al. 2018).
 
 Usage:
-    python -m src.source_separation.train_unet
+    python -m src.source_separation.unet.train
 
 Data sources:
     settings.SSD_ROOT/**/Audio-Multitracks-Clean/vocals.wav
@@ -34,8 +34,8 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 import settings
 
-from src.source_separation.unet import UNetSmall
-from src.source_separation.dataset import TampuraSeparationDataset
+from src.source_separation.unet.model import UNetSmall
+from src.source_separation.unet.dataset import TampuraSeparationDataset
 
 
 # -----------------------------------------------------------------------

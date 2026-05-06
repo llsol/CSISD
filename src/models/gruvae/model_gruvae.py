@@ -54,11 +54,17 @@ class ModelConfig:
     condition_z_every_step: bool  = True
     teacher_forcing_ratio:  float = 1.0
 
+    # Conditional VAE: condition decoder on svara label one-hot
+    # Set svara_cond_dim = 0 to disable (unconditional VAE)
+    svara_cond_dim:         int   = 7
+
     lambda_type:            float = 1.0
-    lambda_dur:             float = 1.0
-    lambda_cp_cents:        float = 5.0   # CP pitch — most informative
-    lambda_sta_cents:       float = 2.0   # STA pitch — relevant but less than CP
-    lambda_sil_cents:       float = 0.5   # SIL pitch — inherited, least critical
+    lambda_dur_cp:          float = 0.3   # CP dur — moderately invariant (MI_perf≈0.05)
+    lambda_dur_sta:         float = 0.05  # STA dur — performer-dependent (MI_perf≈0.26-0.39)
+    lambda_dur_sil:         float = 0.1   # SIL dur — weak signal
+    lambda_cp_cents:        float = 2.0   # CP pitch — discriminative but performer-dependent
+    lambda_sta_cents:       float = 5.0   # STA pitch — highest MI, most performer-invariant
+    lambda_sil_cents:       float = 0.3   # SIL pitch — inherited, least critical
     lambda_length:          float = 0.1   # weight for n_segments prediction loss
 
     beta:                   float = 1.0
@@ -127,7 +133,12 @@ class SvaraDecoder(nn.Module):
     def __init__(self, cfg: ModelConfig):
         super().__init__()
         self.cfg = cfg
-        decoder_input_dim = cfg.input_dim + (cfg.latent_dim if cfg.condition_z_every_step else 0)
+        cond_dim = cfg.svara_cond_dim
+        decoder_input_dim = (
+            cfg.input_dim
+            + (cfg.latent_dim if cfg.condition_z_every_step else 0)
+            + cond_dim
+        )
 
         gru_dropout = cfg.dropout if cfg.num_layers > 1 else 0.0
         self.gru = nn.GRU(
@@ -137,9 +148,9 @@ class SvaraDecoder(nn.Module):
             batch_first=True,
             dropout=gru_dropout,
         )
-        # Map z to initial hidden state; tanh keeps values in GRU-friendly range
+        # Map z (+ condition) to initial hidden state; tanh keeps values in GRU-friendly range
         self.init_hidden = nn.Sequential(
-            nn.Linear(cfg.latent_dim, cfg.hidden_dim * cfg.num_layers),
+            nn.Linear(cfg.latent_dim + cond_dim, cfg.hidden_dim * cfg.num_layers),
             nn.Tanh(),
         )
 
@@ -147,17 +158,19 @@ class SvaraDecoder(nn.Module):
         self.dur_head   = nn.Linear(cfg.hidden_dim, 1)
         self.cents_head = nn.Linear(cfg.hidden_dim, 1)
 
-    def latent_to_hidden(self, z: torch.Tensor) -> torch.Tensor:
+    def latent_to_hidden(self, z: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
         batch_size = z.size(0)
-        hidden = self.init_hidden(z)
+        hidden = self.init_hidden(torch.cat([z, cond], dim=-1))
         hidden = hidden.view(batch_size, self.cfg.num_layers, self.cfg.hidden_dim)
         return hidden.transpose(0, 1).contiguous()
 
-    def step(self, prev_input, hidden, z):
+    def step(self, prev_input, hidden, z, cond):
+        parts = [prev_input]
         if self.cfg.condition_z_every_step:
-            step_input = torch.cat([prev_input, z], dim=-1)
-        else:
-            step_input = prev_input
+            parts.append(z)
+        if self.cfg.svara_cond_dim > 0:
+            parts.append(cond)
+        step_input = torch.cat(parts, dim=-1)
 
         output, hidden = self.gru(step_input.unsqueeze(1), hidden)
         output = output.squeeze(1)
@@ -180,13 +193,14 @@ class SvaraDecoder(nn.Module):
     def forward(
         self,
         z: torch.Tensor,
+        cond: torch.Tensor,
         target_seq: torch.Tensor | None = None,
         teacher_forcing_ratio: float = 1.0,
         max_len: int | None = None,
     ) -> dict:
         batch_size = z.size(0)
         device     = z.device
-        hidden     = self.latent_to_hidden(z)
+        hidden     = self.latent_to_hidden(z, cond)
 
         if max_len is None:
             max_len = target_seq.size(1) if target_seq is not None else self.cfg.max_seq_len
@@ -196,7 +210,7 @@ class SvaraDecoder(nn.Module):
         type_logits_all, dur_all, cents_all = [], [], []
 
         for t in range(max_len):
-            type_logits, dur_pred, cents_pred, hidden = self.step(prev_input, hidden, z)
+            type_logits, dur_pred, cents_pred, hidden = self.step(prev_input, hidden, z, cond)
 
             type_logits_all.append(type_logits)
             dur_all.append(dur_pred)
@@ -246,10 +260,19 @@ class SvaraGRUVAE(nn.Module):
         norm = torch.sigmoid(self.length_head(z).squeeze(-1))   # (0, 1)
         return (norm * self.cfg.max_seq_len).clamp(min=1.0)
 
+    def _make_cond(self, svara_idx: torch.Tensor | None, batch_size: int, device: torch.device) -> torch.Tensor:
+        """One-hot condition vector (batch, svara_cond_dim). Zeros if cond disabled or idx is None."""
+        if self.cfg.svara_cond_dim == 0:
+            return torch.zeros(batch_size, 0, device=device)
+        if svara_idx is None:
+            return torch.zeros(batch_size, self.cfg.svara_cond_dim, device=device)
+        return F.one_hot(svara_idx, num_classes=self.cfg.svara_cond_dim).float()
+
     def forward(
         self,
         x: torch.Tensor,
         lengths: torch.Tensor,
+        svara_idx: torch.Tensor | None = None,
         teacher_forcing_ratio: float | None = None,
     ) -> dict:
         if teacher_forcing_ratio is None:
@@ -257,8 +280,9 @@ class SvaraGRUVAE(nn.Module):
 
         mu, logvar = self.encoder(x, lengths)
         z = self.reparameterize(mu, logvar)
+        cond = self._make_cond(svara_idx, x.size(0), x.device)
         decoded = self.decoder(
-            z, target_seq=x,
+            z, cond, target_seq=x,
             teacher_forcing_ratio=teacher_forcing_ratio,
             max_len=x.size(1),
         )
@@ -272,6 +296,7 @@ class SvaraGRUVAE(nn.Module):
         self,
         batch_size: int = 1,
         z: torch.Tensor | None = None,
+        svara_idx: torch.Tensor | None = None,
         max_len: int | None = None,
         device: torch.device | None = None,
     ) -> dict:
@@ -280,14 +305,15 @@ class SvaraGRUVAE(nn.Module):
         if z is None:
             z = torch.randn(batch_size, self.cfg.latent_dim, device=device)
 
+        cond = self._make_cond(svara_idx, z.size(0), device)
+
         self.eval()
         with torch.no_grad():
-            # Use predicted length if max_len not given explicitly
             if max_len is None:
-                pred_len = self.predict_length(z)                        # (batch,)
+                pred_len = self.predict_length(z)
                 max_len  = int(pred_len.round().clamp(1, self.cfg.max_seq_len).max().item())
 
-            decoded = self.decoder(z, teacher_forcing_ratio=0.0, max_len=max_len)
+            decoded = self.decoder(z, cond, teacher_forcing_ratio=0.0, max_len=max_len)
             idx = decoded["type_logits"].argmax(dim=-1)
             oh  = F.one_hot(idx, num_classes=self.cfg.type_dim).float()
             generated = torch.cat(
@@ -334,10 +360,15 @@ def reconstruction_loss(
         dur_loss_all   = F.mse_loss(outputs["duration"], target_duration, reduction="none")
         cents_loss_all = F.mse_loss(outputs["cents"],    target_cents,    reduction="none")
 
-    # Per-type cents weights: CP pitch most informative, SIL least
     cp_mask  = targets[:, :, 0]   # (B, T)
     sta_mask = targets[:, :, 2]   # (B, T)
     sil_mask = targets[:, :, 1]   # (B, T)
+
+    dur_weight = (
+        cfg.lambda_dur_cp  * cp_mask  +
+        cfg.lambda_dur_sta * sta_mask +
+        cfg.lambda_dur_sil * sil_mask
+    )
     cents_weight = (
         cfg.lambda_cp_cents  * cp_mask  +
         cfg.lambda_sta_cents * sta_mask +
@@ -346,10 +377,10 @@ def reconstruction_loss(
 
     n = mask.sum().clamp_min(1.0)
     type_loss  = (type_loss_all  * mask).sum() / n
-    dur_loss   = (dur_loss_all   * mask).sum() / n
+    dur_loss   = (dur_loss_all   * dur_weight * mask).sum() / n
     cents_loss = (cents_loss_all * cents_weight * mask).sum() / n
 
-    loss = cfg.lambda_type * type_loss + cfg.lambda_dur * dur_loss + cents_loss
+    loss = cfg.lambda_type * type_loss + dur_loss + cents_loss
 
     # Length prediction loss — computed on normalised scale [0, 1]
     length_loss = F.smooth_l1_loss(

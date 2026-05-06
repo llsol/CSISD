@@ -179,8 +179,6 @@ def hampel_filter(
     return {"score": score, "local_median": local_median, "is_outlier": is_outlier}
 
 
-BIPOLAR_MAX_LAG = 2      # max distance (frames) between entry and exit spike
-
 
 def bipolar_spike_detector(
     vel1: np.ndarray,
@@ -443,7 +441,7 @@ def run(recording_id: str, sep: str = "unet"):
     if not sep_path.exists():
         raise FileNotFoundError(
             f"{sep_label} pitch not found: {sep_path}\n"
-            f"Run: python -m src.source_separation.ftanet_predict --{sep}"
+            f"Run: python -m src.pitch_extraction.ftanet_predict --{sep}"
         )
 
     raw  = np.load(raw_path)

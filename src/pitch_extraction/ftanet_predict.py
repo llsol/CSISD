@@ -6,10 +6,10 @@ Requires tensorflow in the compiam environment.
 
 Run with the compiam environment:
     # Original recording (MP3 from corpus):
-    /home/lluis/anaconda3/envs/compiam/bin/python -m src.source_separation.ftanet_predict srs_v1_svd_sav
+    /home/lluis/anaconda3/envs/compiam/bin/python -m src.pitch_extraction.ftanet_predict srs_v1_svd_sav
 
     # U-Net separated voice:
-    /home/lluis/anaconda3/envs/compiam/bin/python -m src.source_separation.ftanet_predict srs_v1_svd_sav --unet
+    /home/lluis/anaconda3/envs/compiam/bin/python -m src.pitch_extraction.ftanet_predict srs_v1_svd_sav --unet
 
 Writes : data/interim/{recording_id}/pitch_raw/{recording_id}_{suffix}_ftanet_raw.npy
          shape: (N, 2) — col 0: time_sec, col 1: f0_Hz (0.0 = unvoiced)

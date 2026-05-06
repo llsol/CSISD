@@ -210,15 +210,33 @@ class SwiftF0(nn.Module):
 
     def export_onnx(self, out_path: str | Path, audio_len: int = 16_000 * 30):
         """Export fine-tuned model to ONNX (drop-in for swift_f0/model.onnx)."""
-        self.eval()
+        original_device = next(self.parameters()).device
+        self.cpu().eval()
+
+        # torch.stft return_complex=True is not ONNX-traceable; patch _log_spec
+        # to use the real-valued path only during export.
+        def _log_spec_onnx(audio: torch.Tensor) -> torch.Tensor:
+            audio = F.pad(audio, (PAD, PAD))
+            stft = torch.stft(
+                audio, n_fft=N_FFT, hop_length=HOP, win_length=N_FFT,
+                window=self.window, center=False, return_complex=False,
+            )                                              # (B, 513, T, 2)
+            mag = torch.sqrt(stft[..., 0].pow(2) + stft[..., 1].pow(2))
+            mag = mag[:, FREQ_LOW:FREQ_HIGH, :]            # (B, 132, T)
+            return torch.log(mag + 1e-9)
+
+        _orig = self._log_spec
+        self._log_spec = _log_spec_onnx
+
         dummy = torch.zeros(1, audio_len)
         torch.onnx.export(
-            self,
-            dummy,
-            str(out_path),
+            self, dummy, str(out_path),
             input_names=["input_audio"],
             output_names=["pitch_hz", "confidence", "pitch_probs"],
             dynamic_axes={"input_audio": {1: "audio_length"}},
             opset_version=17,
         )
+
+        self._log_spec = _orig
+        self.to(original_device)
         print(f"[SwiftF0] Exported ONNX → {out_path}")

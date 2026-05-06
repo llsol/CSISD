@@ -40,6 +40,9 @@ from src.features.structural_embedding import (
 
 INPUT_DIM = 6
 
+SVARA_LABELS = sorted(['D', 'G', 'M', 'N', 'P', 'R', 'S'])
+SVARA_TO_IDX = {label: i for i, label in enumerate(SVARA_LABELS)}
+
 
 # ---------------------------------------------------------------------------
 # Core conversion
@@ -282,7 +285,8 @@ class SvaraDataset(Dataset):
             tonic_map = S.SARASUDA_TONICS
 
         self.feature_cols = feature_cols
-        self._sequences: list[np.ndarray] = []
+        self._sequences:    list[np.ndarray] = []
+        self._svara_labels: list[str]        = []
 
         for rid in recording_ids:
             svaras = build_svara_sequences(
@@ -293,32 +297,36 @@ class SvaraDataset(Dataset):
                 tau_init_sil=tau_init_sil,
             )
             for s in svaras:
-                self._sequences.append(s["sequence"])   # (n_segments, 6)
+                self._sequences.append(s["sequence"])          # (n_segments, 6)
+                self._svara_labels.append(s["svara_label"])    # str
 
     def __len__(self) -> int:
         return len(self._sequences)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int, int]:
         seq = self._sequences[idx]                      # (n_segments, 6)
         if self.feature_cols is not None:
             seq = seq[:, self.feature_cols]             # (n_segments, n_feats)
-        return torch.from_numpy(seq), seq.shape[0]      # tensor, length
+        svara_idx = SVARA_TO_IDX.get(self._svara_labels[idx], 0)
+        return torch.from_numpy(seq), seq.shape[0], svara_idx
 
 
 def collate_svara_batch(
-    batch: list[tuple[torch.Tensor, int]],
+    batch: list[tuple[torch.Tensor, int, int]],
     max_len: int | None = None,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Collate function for DataLoader.
 
     Returns
     -------
-    padded  : (batch, max_len, n_feats)  float32
-    lengths : (batch,)                   int64
+    padded     : (batch, max_len, n_feats)  float32
+    lengths    : (batch,)                   int64
+    svara_idxs : (batch,)                   int64
     """
-    seqs, lengths = zip(*batch)
-    lengths_t = torch.tensor(lengths, dtype=torch.long)
+    seqs, lengths, svara_idxs = zip(*batch)
+    lengths_t    = torch.tensor(lengths,    dtype=torch.long)
+    svara_idxs_t = torch.tensor(svara_idxs, dtype=torch.long)
 
     if max_len is None:
         max_len = int(lengths_t.max().item())
@@ -328,7 +336,7 @@ def collate_svara_batch(
     for i, (seq, length) in enumerate(zip(seqs, lengths)):
         padded[i, :length] = seq[:length]
 
-    return padded, lengths_t
+    return padded, lengths_t, svara_idxs_t
 
 
 def build_dataloader(

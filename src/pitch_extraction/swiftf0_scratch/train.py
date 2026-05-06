@@ -46,11 +46,13 @@ from src.pitch_extraction.swiftf0_scratch.model import SwiftF0Scratch, N_PITCH_B
 from src.pitch_extraction.swiftf0_finetune.dataset import SCMSDataset, collate_fn, scms_official_split
 
 # ── hyper-parameters ─────────────────────────────────────────────────────────
-BATCH_SIZE     = 4
-EPOCHS         = 100
-LR             = 1e-4
-VOICING_WEIGHT = 1.0
-SEED           = 42
+BATCH_SIZE       = 4
+EPOCHS           = 100
+LR               = 1e-4
+VOICING_WEIGHT   = 1.0
+LABEL_SIGMA_BINS = 1.5   # Gaussian soft-label σ ≈ 27 cents (18.3 ¢/bin × 1.5)
+GAIN_DB_RANGE    = 6.0   # random gain augmentation ± dB (train only)
+SEED             = 42
 # ─────────────────────────────────────────────────────────────────────────────
 
 CKPT_DIR = settings.DATA_INTERIM / "models" / "swiftf0_scratch"
@@ -63,8 +65,20 @@ def hz_to_bin(f0_hz: torch.Tensor, bin_centers: torch.Tensor) -> torch.Tensor:
     return (log_f0 - log_centers).abs().argmin(dim=-1)             # (B, T)
 
 
+def make_soft_labels(
+    target_bins: torch.Tensor,   # (N,) long — hard bin indices
+    n_bins:      int,
+    sigma_bins:  float,
+) -> torch.Tensor:
+    """Gaussian soft labels centred on target_bins. Returns (N, n_bins)."""
+    bins = torch.arange(n_bins, dtype=torch.float32, device=target_bins.device)
+    t    = target_bins.float().unsqueeze(1)                        # (N, 1)
+    soft = torch.exp(-0.5 * ((bins - t) / sigma_bins) ** 2)       # (N, n_bins)
+    return soft / soft.sum(dim=-1, keepdim=True)
+
+
 def pitch_cross_entropy(
-    pitch_probs: torch.Tensor,   # (B, 360, T)
+    pitch_probs: torch.Tensor,   # (B, 360, T) — post-softmax
     f0_hz:       torch.Tensor,   # (B, T)
     voiced:      torch.Tensor,   # (B, T) bool
     bin_centers: torch.Tensor,   # (360,)
@@ -79,7 +93,9 @@ def pitch_cross_entropy(
     target_flat = target.reshape(B * T)
     voiced_flat = voiced.reshape(B * T)
 
-    return nn.functional.cross_entropy(probs_flat[voiced_flat], target_flat[voiced_flat])
+    probs_v  = probs_flat[voiced_flat]
+    soft     = make_soft_labels(target_flat[voiced_flat], N_PITCH_BINS, LABEL_SIGMA_BINS)
+    return -(soft * torch.log(probs_v.clamp(min=1e-9))).sum(dim=-1).mean()
 
 
 def run_epoch(
@@ -99,6 +115,12 @@ def run_epoch(
         voiced = batch["voiced"].to(device)
 
         with torch.set_grad_enabled(train):
+            if train:
+                gain = torch.empty(audio.shape[0], 1, device=device).uniform_(
+                    -GAIN_DB_RANGE, GAIN_DB_RANGE
+                )
+                audio = audio * (10.0 ** (gain / 20.0))
+
             _, confidence, pitch_probs = model(audio)
 
             T_model = confidence.shape[1]
