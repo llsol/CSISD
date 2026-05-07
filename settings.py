@@ -10,6 +10,8 @@ DATA_CORPUS    = PROJECT_ROOT / "data" / "corpus"
 DATA_INTERIM   = PROJECT_ROOT / "data" / "interim"
 DATA_PROCESSED = PROJECT_ROOT / "data" / "processed"
 
+FIGURES_DIR    = PROJECT_ROOT / "figures"
+
 SSD_ROOT = Path("/media/lluis/Extreme SSD")
 SCMS_ROOT = DATA_CORPUS / "scms" 
 

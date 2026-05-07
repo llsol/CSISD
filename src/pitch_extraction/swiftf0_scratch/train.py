@@ -46,12 +46,14 @@ from src.pitch_extraction.swiftf0_scratch.model import SwiftF0Scratch, N_PITCH_B
 from src.pitch_extraction.swiftf0_finetune.dataset import SCMSDataset, collate_fn, scms_official_split
 
 # ── hyper-parameters ─────────────────────────────────────────────────────────
-BATCH_SIZE       = 4
+BATCH_SIZE       = 24
 EPOCHS           = 100
 LR               = 1e-4
 VOICING_WEIGHT   = 1.0
 LABEL_SIGMA_BINS = 1.5   # Gaussian soft-label σ ≈ 27 cents (18.3 ¢/bin × 1.5)
 GAIN_DB_RANGE    = 6.0   # random gain augmentation ± dB (train only)
+CROP_SEC         = 5.0   # random crop length for training (full files for val)
+GRAD_CLIP        = 1.0   # max gradient norm
 SEED             = 42
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -142,6 +144,7 @@ def run_epoch(
             if train:
                 optimizer.zero_grad()
                 loss.backward()
+                nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
                 optimizer.step()
 
         total_loss       += loss.item()
@@ -178,12 +181,14 @@ def main():
                 settings.PROJECT_ROOT / "data" / "datasets" / "scms"
 
     train_stems, test_stems = scms_official_split(scms_root)
-    train_ds = SCMSDataset(scms_root, split=train_stems, crop_sec=0.0)
-    val_ds   = SCMSDataset(scms_root, split=test_stems,  crop_sec=0.0)
+    train_ds = SCMSDataset(scms_root, split=train_stems, crop_sec=CROP_SEC)
+    val_ds   = SCMSDataset(scms_root, split=test_stems,  crop_sec=CROP_SEC)
     train_loader = DataLoader(train_ds, batch_size=args.batch_size,
-                              shuffle=True,  collate_fn=collate_fn, num_workers=2)
+                              shuffle=True,  collate_fn=collate_fn,
+                              num_workers=2, pin_memory=device.type == "cuda")
     val_loader   = DataLoader(val_ds,   batch_size=args.batch_size,
-                              shuffle=False, collate_fn=collate_fn, num_workers=2)
+                              shuffle=False, collate_fn=collate_fn,
+                              num_workers=2, pin_memory=device.type == "cuda")
     print(f"[train] train={len(train_ds)}  val={len(val_ds)}")
 
     model = SwiftF0Scratch().to(device)
@@ -207,22 +212,22 @@ def main():
         last_path = existing_runs[-1] / "last.pt"
         if last_path.exists():
             ckpt = torch.load(last_path, map_location=device)
-            if ckpt["epoch"] < args.epochs:
-                model.load_state_dict(ckpt["model"])
-                optimizer.load_state_dict(ckpt["optimizer"])
-                scheduler.load_state_dict(ckpt["scheduler"])
-                best_val    = ckpt["best_val"]
-                start_epoch = ckpt["epoch"] + 1
-                history     = ckpt.get("history", [])
-                run_id      = ckpt["run_id"]
-                resumed     = True
-                print(f"[train] Resumed run_{run_id:03d} from epoch {ckpt['epoch']}  "
-                      f"(best_val={best_val:.4f})")
-            else:
-                print(f"[train] Run {existing_runs[-1].name} complete — starting new run.")
+            model.load_state_dict(ckpt["model"])
+            optimizer.load_state_dict(ckpt["optimizer"])
+            scheduler.load_state_dict(ckpt["scheduler"])
+            best_val    = ckpt["best_val"]
+            start_epoch = ckpt["epoch"] + 1
+            history     = ckpt.get("history", [])
+            run_id      = ckpt["run_id"]
+            resumed     = True
+            if start_epoch > args.epochs:
+                # interpret --epochs as "N more epochs from current"
+                args.epochs = ckpt["epoch"] + args.epochs
+            print(f"[train] Resumed run_{run_id:03d} from epoch {ckpt['epoch']}  "
+                  f"(best_val={best_val:.4f})  target={args.epochs}")
 
     if not resumed:
-        run_id = len(existing_runs) + 1
+        run_id = int(existing_runs[-1].name.split("_")[1]) + 1 if existing_runs else 1
 
     run_dir = CKPT_DIR / f"run_{run_id:03d}"
     run_dir.mkdir(exist_ok=True)
@@ -230,7 +235,9 @@ def main():
 
     # ── training loop ────────────────────────────────────────────────────────
     for epoch in range(start_epoch, args.epochs + 1):
-        t0            = time.time()
+        t0 = time.time()
+        train_ds.epoch = epoch
+        val_ds.epoch   = epoch
         train_metrics = run_epoch(model, train_loader, optimizer, device, train=True)
         val_metrics   = run_epoch(model, val_loader,   None,      device, train=False)
         elapsed       = time.time() - t0
@@ -272,10 +279,12 @@ def main():
             "history":   history,
         }
 
-        torch.save(ckpt_data, run_dir / f"epoch_{epoch:03d}.pt")
         torch.save(ckpt_data, run_dir / "last.pt")
         if is_best:
             torch.save(ckpt_data, run_dir / "best.pt")
+            torch.save(ckpt_data, run_dir / f"epoch_{epoch:06d}_best.pt")
+        elif epoch % 10 == 0:
+            torch.save(ckpt_data, run_dir / f"epoch_{epoch:06d}.pt")
 
         with open(run_dir / "history.json", "w") as f:
             json.dump(history, f, indent=2)

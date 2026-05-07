@@ -78,8 +78,9 @@ MODEL_CFG = ModelConfig(
 
 class _Tee:
     """Write to stdout and a log file simultaneously."""
-    def __init__(self, log_path: Path):
-        self._file   = log_path.open("w", buffering=1)
+    def __init__(self, log_path: Path, append: bool = False):
+        mode = "a" if append else "w"
+        self._file   = log_path.open(mode, buffering=1)
         self._stdout = sys.stdout
     def write(self, data: str):
         self._stdout.write(data)
@@ -221,12 +222,12 @@ def train(
             resumed       = True
 
     if not resumed:
-        run_id = len(existing_runs) + 1
+        run_id = int(existing_runs[-1].name.split("_")[1]) + 1 if existing_runs else 1
 
     run_dir = checkpoint_dir / f"run_{run_id:03d}"
     run_dir.mkdir(exist_ok=True)
 
-    tee = _Tee(run_dir / f"run_{run_id:03d}.log")
+    tee = _Tee(run_dir / f"run_{run_id:03d}.log", append=resumed)
     sys.stdout = tee
 
     try:
@@ -292,6 +293,11 @@ def train(
                        model, optimizer, scheduler, best_val_loss, history)
             if is_best:
                 _save_ckpt(run_dir / "best.pt", epoch, global_step, run_id,
+                           model, optimizer, scheduler, best_val_loss, history)
+                _save_ckpt(run_dir / f"epoch_{epoch:06d}_best.pt", epoch, global_step, run_id,
+                           model, optimizer, scheduler, best_val_loss, history)
+            if epoch % 50 == 0:
+                _save_ckpt(run_dir / f"epoch_{epoch:06d}.pt", epoch, global_step, run_id,
                            model, optimizer, scheduler, best_val_loss, history)
 
             with open(run_dir / "history.json", "w") as f:

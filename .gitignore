@@ -11,6 +11,7 @@ convert_filenames.py
 /auxiliar/*
 /data/*
 /docs/*
+/figures/*
 
 __pycache__/
 *.py[cod]
@@ -20,3 +21,8 @@ __pycache__/
 # models
 *.pt
 *.pth
+
+
+# projects
+/svara-forms/*
+

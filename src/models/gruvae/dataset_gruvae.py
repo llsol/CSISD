@@ -285,8 +285,9 @@ class SvaraDataset(Dataset):
             tonic_map = S.SARASUDA_TONICS
 
         self.feature_cols = feature_cols
-        self._sequences:    list[np.ndarray] = []
-        self._svara_labels: list[str]        = []
+        self._sequences:     list[np.ndarray] = []
+        self._svara_labels:  list[str]        = []
+        self._recording_ids: list[str]        = []
 
         for rid in recording_ids:
             svaras = build_svara_sequences(
@@ -299,6 +300,7 @@ class SvaraDataset(Dataset):
             for s in svaras:
                 self._sequences.append(s["sequence"])          # (n_segments, 6)
                 self._svara_labels.append(s["svara_label"])    # str
+                self._recording_ids.append(rid)                # str
 
     def __len__(self) -> int:
         return len(self._sequences)
