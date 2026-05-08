@@ -101,7 +101,7 @@ def encode_dataset(model: SvaraGRUVAE, device: torch.device) -> dict:
         x         = x.to(device)
         lengths   = lengths.to(device)
         svara_idx = svara_idx.to(device)
-        mu, _     = model.encoder(x, lengths)
+        mu, _, _  = model.encoder(x, lengths)
         all_mu.append(mu.cpu().numpy())
         all_svara_idx.append(svara_idx.cpu().numpy())
 
@@ -236,30 +236,33 @@ def main() -> None:
                         help="Max k for k-means search")
     args = parser.parse_args()
 
-    OUT_FIGS.mkdir(parents=True, exist_ok=True)
-    (OUT_FIGS / "svara_forms").mkdir(exist_ok=True)
-    OUT_DATA.mkdir(parents=True, exist_ok=True)
+    device   = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model    = load_model(args.run, device)
+    run_name = args.run if args.run else sorted(CKPT_DIR.glob("run_*"))[-1].name
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model  = load_model(args.run, device)
+    out_figs = OUT_FIGS / run_name
+    out_data = OUT_DATA / run_name
+    out_figs.mkdir(parents=True, exist_ok=True)
+    (out_figs / "svara_forms").mkdir(exist_ok=True)
+    out_data.mkdir(parents=True, exist_ok=True)
 
     # ── encode ──────────────────────────────────────────────────────────────
     enc = encode_dataset(model, device)
     mu, svara_label, rec_id = enc["mu"], enc["svara_label"], enc["rec_id"]
 
     np.savez_compressed(
-        OUT_DATA / "latent_z.npz",
+        out_data / "latent_z.npz",
         mu=mu,
         svara_idx=enc["svara_idx"],
         svara_label=svara_label.astype(str),
         rec_id=rec_id.astype(str),
     )
-    print(f"[latent] saved latent vectors → {OUT_DATA / 'latent_z.npz'}")
+    print(f"[latent] saved latent vectors → {out_data / 'latent_z.npz'}")
 
     # ── global t-SNE (on mu, not z) ─────────────────────────────────────────
     emb = compute_tsne(mu)
-    plot_tsne_all(emb, svara_label, OUT_FIGS / "tsne_by_svara.png")
-    plot_tsne_by_performer(emb, rec_id, OUT_FIGS / "tsne_by_performer.png")
+    plot_tsne_all(emb, svara_label, out_figs / "tsne_by_svara.png")
+    plot_tsne_by_performer(emb, rec_id, out_figs / "tsne_by_performer.png")
 
     # ── per-svara clustering ─────────────────────────────────────────────────
     results = {}
@@ -284,13 +287,13 @@ def main() -> None:
         }
         print(f"  best k={k}  silhouette={sil:.3f}")
         plot_svara_forms(emb_sv, labels, sv, k, sil,
-                         OUT_FIGS / "svara_forms" / f"{sv}_forms.png")
+                         out_figs / "svara_forms" / f"{sv}_forms.png")
 
-    plot_silhouettes(results, OUT_FIGS / "silhouette_scores.png")
+    plot_silhouettes(results, out_figs / "silhouette_scores.png")
 
-    with open(OUT_DATA / "svara_forms.json", "w") as f:
+    with open(out_data / "svara_forms.json", "w") as f:
         json.dump(results, f, indent=2)
-    print(f"[latent] saved form assignments → {OUT_DATA / 'svara_forms.json'}")
+    print(f"[latent] saved form assignments → {out_data / 'svara_forms.json'}")
 
     # ── summary ──────────────────────────────────────────────────────────────
     print("\n── Svara-form summary ──────────────────────────────────────")

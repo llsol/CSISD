@@ -37,7 +37,7 @@ from src.pitch_extraction.swiftf0_scratch.model import SR as SR_SC, HOP as HOP_S
 
 SCMS_ROOT  = settings.PROJECT_ROOT / "data" / "datasets" / "scms"
 PITCH_ROOT = settings.DATA_INTERIM / "scms_pitch"
-OUT_DIR    = settings.FIGURES_DIR / "evaluation"
+OUT_BASE   = settings.FIGURES_DIR / "swiftf0_scratch" / "evaluation"
 
 METRICS    = ["Voicing Recall", "Voicing False Alarm",
               "Raw Pitch Accuracy", "Raw Chroma Accuracy", "Overall Accuracy"]
@@ -168,6 +168,9 @@ def main() -> None:
 
     scms_root = Path(args.scms_root) if args.scms_root else SCMS_ROOT
     device    = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    run_tag   = args.run_scratch or "latest"
+    thr_tag   = f"thr{args.thr:.2f}".replace(".", "")
+    OUT_DIR   = OUT_BASE / f"{run_tag}_{thr_tag}"
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     _, test_stems = scms_official_split(scms_root)
@@ -224,14 +227,15 @@ def main() -> None:
         print(f"  {lbl:<22} {agg_fta[m]*100:>8.2f}  {agg_sc[m]*100:>8.2f}")
 
     # ── plots ─────────────────────────────────────────────────────────────────
+    tag = f"{run_tag}_{thr_tag}"
     plot_bar(agg_fta, agg_sc,
-             OUT_DIR / "bar_metrics.png")
+             OUT_DIR / f"bar_metrics_{tag}.png")
     plot_scatter(per_stem_fta, per_stem_sc,
-                 OUT_DIR / "scatter_oa.png")
+                 OUT_DIR / f"scatter_oa_{tag}.png")
     plot_vfa_hist(per_stem_fta, per_stem_sc,
-                  OUT_DIR / "hist_vfa.png")
+                  OUT_DIR / f"hist_vfa_{tag}.png")
     plot_rpa_vs_vfa(per_stem_fta, per_stem_sc,
-                    OUT_DIR / "scatter_rpa_vfa.png")
+                    OUT_DIR / f"scatter_rpa_vfa_{tag}.png")
 
 
 if __name__ == "__main__":

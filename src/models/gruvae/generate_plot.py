@@ -29,6 +29,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn.functional as F
+from dataclasses import fields as dataclass_fields
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
@@ -37,9 +38,9 @@ from src.models.gruvae.dataset_gruvae import SVARA_LABELS, SVARA_TO_IDX
 from src.models.gruvae.model_gruvae import ModelConfig, SvaraGRUVAE
 
 CKPT_DIR   = settings.DATA_INTERIM / "models" / "gruvae_v4"
-TYPE_NAMES = ["CP", "SIL", "STA"]
-COLOR      = {"CP": "#4caf50", "SIL": "#9e9e9e", "STA": "#ff9800"}
-ALPHA      = {"CP": 0.40,      "SIL": 0.30,      "STA": 0.35}
+TYPE_NAMES = ["CP", "SIL", "STA", "TR"]
+COLOR      = {"CP": "#4caf50", "SIL": "#9e9e9e", "STA": "#ff9800", "TR": "#2196f3"}
+ALPHA      = {"CP": 0.40,      "SIL": 0.30,      "STA": 0.35,      "TR": 0.30}
 BOX_H      = 50   # half-height of each box in cents
 
 
@@ -50,8 +51,11 @@ def load_model(run: str | None, device: torch.device) -> SvaraGRUVAE:
     best    = run_dir / "best.pt"
     if not best.exists():
         best = run_dir / "last.pt"
-    ckpt  = torch.load(best, map_location=device)
-    cfg   = ModelConfig(**ckpt["model_cfg"])
+    ckpt      = torch.load(best, map_location=device)
+    known     = {f.name for f in dataclass_fields(ModelConfig)}
+    cfg_dict  = {k: v for k, v in ckpt["model_cfg"].items() if k in known}
+    cfg_dict.setdefault("use_attention", False)   # older checkpoints lack this key
+    cfg       = ModelConfig(**cfg_dict)
     model = SvaraGRUVAE(cfg).to(device)
     model.load_state_dict(ckpt["model"])
     model.eval()
@@ -62,17 +66,19 @@ def load_model(run: str | None, device: torch.device) -> SvaraGRUVAE:
 # ── generation ────────────────────────────────────────────────────────────────
 
 def generate(
-    model:       SvaraGRUVAE,
-    svara_label: str,
-    n:           int,
-    device:      torch.device,
+    model:         SvaraGRUVAE,
+    svara_label:   str,
+    n:             int,
+    device:        torch.device,
+    use_hard_mask: bool = False,
 ) -> list[dict]:
     idx_t = torch.tensor(
         [SVARA_TO_IDX[svara_label]] * n, dtype=torch.long, device=device
     )
     with torch.no_grad():
-        out      = model.generate(batch_size=n, svara_idx=idx_t, device=device)
-    gen       = out["generated"]         # (n, max_len, 5): [CP, SIL, STA, dur_rel, cents_norm]
+        out      = model.generate(batch_size=n, svara_idx=idx_t, device=device,
+                                  use_hard_mask=use_hard_mask)
+    gen       = out["generated"]         # (n, max_len, 6): [CP, SIL, STA, TR, dur_rel, cents_norm]
     pred_lens = out["pred_length"]       # (n,)
 
     results = []
@@ -81,11 +87,14 @@ def generate(
         segs   = gen[i, :n_segs].cpu().numpy()
 
         segments = []
+        type_dim = model.cfg.type_dim   # 4: [CP, SIL, STA, TR]
         for s in segs:
+            typ = TYPE_NAMES[int(np.argmax(s[:type_dim]))]
+            cents = 0.0 if typ in ("SIL", "TR") else float(s[type_dim + 1]) * 1200.0
             segments.append({
-                "type":    TYPE_NAMES[int(np.argmax(s[:3]))],
-                "dur_rel": float(s[3]),
-                "cents":   float(s[4]) * 1200.0,
+                "type":    typ,
+                "dur_rel": float(s[type_dim]),
+                "cents":   cents,
             })
         results.append({"svara": svara_label, "segments": segments})
     return results
@@ -116,20 +125,26 @@ def plot_svara(ax: plt.Axes, data: dict, title: str = "") -> None:
         ax.add_patch(rect)
         rect.set_clip_path(ax.patch)
 
-        # horizontal pitch line (dashed for SIL)
-        ls = "--" if typ == "SIL" else "-"
-        ax.hlines(cents, x, x + w, colors=COLOR[typ], lw=1.8, ls=ls, zorder=3)
+        if typ in ("CP", "STA"):
+            ax.hlines(cents, x, x + w, colors=COLOR[typ], lw=1.8, zorder=3)
+            label = f"{typ}  {cents:+.0f}¢"
+        elif typ == "SIL":
+            ax.hlines(0, x, x + w, colors=COLOR[typ], lw=1.8, ls="--", zorder=3)
+            label = "SIL"
+        else:  # TR
+            ax.hlines(0, x, x + w, colors=COLOR[typ], lw=1.8, ls=":", zorder=3)
+            label = "TR"
 
-        # text in the upper quarter of the box so it clears the line
+        text_y = cents if typ in ("CP", "STA") else 0
         ax.text(
-            x + w / 2, cents + BOX_H * 0.52,
-            f"{typ}  {cents:+.0f}¢",
+            x + w / 2, text_y + BOX_H * 0.52,
+            label,
             ha="center", va="bottom",
             fontsize=6.5, fontweight="bold",
             color="black",
         )
         ax.text(
-            x + w / 2, cents - BOX_H * 0.52,
+            x + w / 2, text_y - BOX_H * 0.52,
             f"{seg['dur_rel'] * 100:.1f}%",
             ha="center", va="top",
             fontsize=6, color="black",
@@ -173,10 +188,13 @@ def main() -> None:
                         help="Run directory, e.g. run_001 (default: latest)")
     parser.add_argument("--out",   default=None,
                         help="Output PNG path (default: data/interim/gruvae_generated.png)")
+    parser.add_argument("--hard-mask", action="store_true",
+                        help="Enforce musical grammar during generation (type transition mask)")
     args = parser.parse_args()
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model  = load_model(args.run, device)
+    device   = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model    = load_model(args.run, device)
+    run_name = args.run if args.run else sorted(CKPT_DIR.glob("run_*"))[-1].name
 
     svaras = SVARA_LABELS if args.all else [args.svara]
     n_rows = len(svaras)
@@ -187,10 +205,14 @@ def main() -> None:
         figsize=(n_cols * 3.5, n_rows * 3.0),
         squeeze=False,
     )
-    fig.suptitle("SvaraGRUVAE — generated svara structures", fontsize=11, fontweight="bold")
+    mask_tag  = "_hardmask" if args.hard_mask else ""
+    fig.suptitle(
+        f"SvaraGRUVAE [{run_name}]{' [hard-mask]' if args.hard_mask else ''} — generated svara structures",
+        fontsize=11, fontweight="bold",
+    )
 
     for r, svara in enumerate(svaras):
-        samples = generate(model, svara, args.n, device)
+        samples = generate(model, svara, args.n, device, use_hard_mask=args.hard_mask)
         for c, sv_data in enumerate(samples):
             plot_svara(axes[r][c], sv_data, title=f"{svara} #{c + 1}")
 
@@ -204,8 +226,9 @@ def main() -> None:
 
     plt.tight_layout(rect=[0, 0.03, 1, 1])
 
-    out_path = Path(args.out) if args.out else \
-               settings.FIGURES_DIR / "gruvae" / "generated.png"
+    svara_tag = "all" if args.all else args.svara
+    out_path  = Path(args.out) if args.out else \
+                settings.FIGURES_DIR / "gruvae" / run_name / f"generated_{svara_tag}{mask_tag}.png"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     print(f"[gruvae] saved → {out_path}")

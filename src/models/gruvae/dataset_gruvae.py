@@ -1,21 +1,22 @@
 """
 GRU+VAE dataset builder.
 
-Converts annotated svaras into variable-length sequences of shape (n_segments, 6)
+Converts annotated svaras into variable-length sequences of shape (n_segments, 7)
 for training the GRU+VAE model.
 
-Segment vector format  (INPUT_DIM = 6):
-    [onehot_CP, onehot_SIL, onehot_STA, dur_rel, total_dur_sec, cents_norm]
+Segment vector format  (INPUT_DIM = 7):
+    [onehot_CP, onehot_SIL, onehot_STA, onehot_TR, dur_rel, total_dur_sec, cents_norm]
 
-    onehot_*      : type encoding — CP=[1,0,0]  SIL=[0,1,0]  STA=[0,0,1]
+    onehot_*      : type encoding — CP=[1,0,0,0]  SIL=[0,1,0,0]  STA=[0,0,1,0]  TR=[0,0,0,1]
     dur_rel       : segment_duration / svara_total_duration  (sum ~1 per svara)
     total_dur_sec : svara duration in seconds  (same value repeated every row)
     cents_norm    : cents_rel_tonic / 1200     (0 = tonic, 1 = octave)
 
 Pitch assignment per segment type (delegates to assign_segment_cents):
     CP  -> median of the flat region
-    SIL -> inherited from the nearest voiced boundary pitch
-    STA -> peak value if the segment starts on a peak; otherwise boundary pitch
+    STA -> peak value at the END of the segment (peak is the endpoint)
+    TR  -> 0.0 (transition, no absolute pitch)
+    SIL -> 0.0 (silence, no pitch)
 """
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ from src.features.structural_embedding import (
     assign_segment_cents,
 )
 
-INPUT_DIM = 6
+INPUT_DIM = 7
 
 SVARA_LABELS = sorted(['D', 'G', 'M', 'N', 'P', 'R', 'S'])
 SVARA_TO_IDX = {label: i for i, label in enumerate(SVARA_LABELS)}
@@ -56,7 +57,7 @@ def segments_to_sequence(
     Convert a list of segment dicts into a (n_segments, INPUT_DIM) array.
 
     Each row:
-        [onehot_CP, onehot_SIL, onehot_STA, dur_rel, total_dur_sec, cents_norm]
+        [onehot_CP, onehot_SIL, onehot_STA, onehot_TR, dur_rel, total_dur_sec, cents_norm]
     """
     times = df_svara["time_rel_sec"].to_numpy()
     N = len(times)
@@ -167,8 +168,6 @@ def build_svara_sequences(
         segments = assign_segment_cents(
             segments=segments,
             df_svara=df_svara,
-            df_full=df_pitch,
-            tau_init_sil=tau_init_sil,
             local_peak_map=local_peak_map,
         )
 

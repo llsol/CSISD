@@ -11,11 +11,15 @@ Run with the compiam environment:
     # U-Net separated voice:
     /home/lluis/anaconda3/envs/compiam/bin/python -m src.pitch_extraction.ftanet_predict srs_v1_svd_sav --unet
 
+    # BS-RoFormer (audio-separator) separated voice:
+    /home/lluis/anaconda3/envs/compiam/bin/python -m src.pitch_extraction.ftanet_predict srs_v1_svd_sav --as
+
 Writes : data/interim/{recording_id}/pitch_raw/{recording_id}_{suffix}_ftanet_raw.npy
          shape: (N, 2) — col 0: time_sec, col 1: f0_Hz (0.0 = unvoiced)
 
   suffix = "original"  when reading from corpus MP3
   suffix = "unet"      when reading from U-Net separated voice
+  suffix = "as"        when reading from BS-RoFormer separated voice
 """
 
 import sys

@@ -47,7 +47,7 @@ from src.pitch_extraction.swiftf0_finetune.dataset import SCMSDataset, collate_f
 
 # ── hyper-parameters ─────────────────────────────────────────────────────────
 BATCH_SIZE       = 24
-EPOCHS           = 100
+EPOCHS           = 2000
 LR               = 1e-4
 VOICING_WEIGHT   = 1.0
 LABEL_SIGMA_BINS = 1.5   # Gaussian soft-label σ ≈ 27 cents (18.3 ¢/bin × 1.5)
@@ -166,8 +166,10 @@ def main():
     parser.add_argument("--epochs",     type=int,   default=EPOCHS)
     parser.add_argument("--batch-size", type=int,   default=BATCH_SIZE)
     parser.add_argument("--lr",         type=float, default=LR)
-    parser.add_argument("--new-run",    action="store_true",
+    parser.add_argument("--new-run",        action="store_true",
                         help="Force a new run directory instead of resuming the last one")
+    parser.add_argument("--reset-scheduler", action="store_true",
+                        help="Ignore saved scheduler state and restart lr from --lr")
     args = parser.parse_args()
 
     torch.manual_seed(SEED)
@@ -197,7 +199,7 @@ def main():
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, patience=3, factor=0.5
+        optimizer, patience=40, factor=0.5, min_lr=1e-6
     )
 
     # ── run directory ────────────────────────────────────────────────────────
@@ -214,7 +216,11 @@ def main():
             ckpt = torch.load(last_path, map_location=device)
             model.load_state_dict(ckpt["model"])
             optimizer.load_state_dict(ckpt["optimizer"])
-            scheduler.load_state_dict(ckpt["scheduler"])
+            if not args.reset_scheduler:
+                scheduler.load_state_dict(ckpt["scheduler"])
+            else:
+                for pg in optimizer.param_groups:
+                    pg["lr"] = args.lr
             best_val    = ckpt["best_val"]
             start_epoch = ckpt["epoch"] + 1
             history     = ckpt.get("history", [])

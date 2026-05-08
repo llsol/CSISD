@@ -62,6 +62,7 @@ def predict_pitch(
     checkpoint:    Path,
     device:        torch.device,
     model:         SwiftF0Scratch,
+    thr:           float = CONFIDENCE_THRESHOLD,
 ) -> Path:
     import librosa
 
@@ -90,7 +91,7 @@ def predict_pitch(
 
             n_frames = len(pitch_hz)
             times    = time_offset + np.arange(n_frames) * hop_sec
-            voiced   = confidence >= CONFIDENCE_THRESHOLD
+            voiced   = confidence >= thr
             f0_out   = pitch_hz.copy()
             f0_out[~voiced] = 0.0
 
@@ -108,7 +109,7 @@ def predict_pitch(
         f"[swiftf0scratch] {len(pitch):,} frames  "
         f"({times_cat[-1]:.1f} s)  "
         f"voiced: {n_voiced:,} ({n_voiced/len(pitch)*100:.1f}%)  "
-        f"conf_thr={CONFIDENCE_THRESHOLD}"
+        f"conf_thr={thr}"
     )
     print(f"[swiftf0scratch] checkpoint: {checkpoint}")
     print(f"[swiftf0scratch] → {out_path}")
@@ -125,6 +126,8 @@ def main():
                         help="Process all recordings in settings.SARASUDA_VARNAM.")
     parser.add_argument("--run", default=None,
                         help="Training run directory name (e.g. run_002).")
+    parser.add_argument("--thr", type=float, default=CONFIDENCE_THRESHOLD,
+                        help=f"Voicing confidence threshold (default: {CONFIDENCE_THRESHOLD})")
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--unet", action="store_true",
                         help="Use U-Net separated voice.")
@@ -139,6 +142,7 @@ def main():
     else:
         recordings = [settings.CURRENT_PIECE]
 
+    thr        = args.thr
     run_dir    = (CKPT_DIR / args.run) if args.run else None
     checkpoint = _find_best_checkpoint(run_dir)
     device     = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -167,9 +171,9 @@ def main():
             audio_path    = _find_corpus_audio(recording_id)
             source_suffix = "original"
 
-        print(f"\n── {recording_id}  [{source_suffix}] ──")
+        print(f"\n── {recording_id}  [{source_suffix}]  thr={thr} ──")
         predict_pitch(recording_id, audio_path, source_suffix,
-                      checkpoint, device, model)
+                      checkpoint, device, model, thr=thr)
 
 
 if __name__ == "__main__":

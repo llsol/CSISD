@@ -40,7 +40,7 @@ from src.models.gruvae.model_gruvae import (
 # ============================================================
 
 RECORDING_IDS  = None    # None → all S.SARASUDA_VARNAM; or e.g. ["srs_v1_bdn_sav"]
-EPOCHS         = 100
+EPOCHS         = 800
 BATCH_SIZE     = 32
 LR             = 5e-4
 WARMUP_STEPS   = 8000
@@ -64,11 +64,12 @@ MODEL_CFG = ModelConfig(
     lambda_dur_sil   = 0.1,   # MI weak
     lambda_cp_cents  = 3.0,
     lambda_sta_cents = 7.0,
-    lambda_sil_cents = 0.3,
-    lambda_length    = 0.1,
-    beta             = 0.5,
-    free_bits        = 0.5,  # prevé posterior collapse: KL ≥ 0.5 × 32 = 16 nats
+    lambda_length     = 0.1,
+    lambda_dur_tr     = 0.1,   # TR duration — return time, informative
+    beta              = 0.5,
+    free_bits         = 0.5,  # prevé posterior collapse: KL ≥ 0.5 × 32 = 16 nats
     use_huber_for_continuous = True,
+    use_attention     = True,  # attention pooling sobre tots els hidden states encoder
 )
 
 
@@ -277,14 +278,23 @@ def train(
             lr_now = optimizer.param_groups[0]["lr"]
 
             flag = "  <- best" if is_best else ""
+            beta_now = min(model_cfg.beta, linear_kl_beta(global_step, warmup_steps))
+            def _fmt(s, key): return f"{s[key]:.4f}"
             print(
                 f"Epoch {epoch:4d}/{epochs}  "
-                f"train={train_stats['total_loss']:.4f} (r={train_stats['recon_loss']:.4f})  "
-                f"val={val_loss:.4f} (r={val_recon:.4f})  "
-                f"kl={train_stats['kl_loss']:.4f}  "
-                f"beta={min(model_cfg.beta, linear_kl_beta(global_step, warmup_steps)):.3f}  "
-                f"lr={lr_now:.2e}  "
-                f"({elapsed:.1f}s){flag}"
+                f"train={_fmt(train_stats,'total_loss')} "
+                f"(type={_fmt(train_stats,'type_loss')} "
+                f"dur={_fmt(train_stats,'dur_loss')} "
+                f"cents={_fmt(train_stats,'cents_loss')} "
+                f"len={_fmt(train_stats,'length_loss')} "
+                f"kl={_fmt(train_stats,'kl_loss')})  "
+                f"val={val_loss:.4f} "
+                f"(type={_fmt(val_stats,'type_loss')} "
+                f"dur={_fmt(val_stats,'dur_loss')} "
+                f"cents={_fmt(val_stats,'cents_loss')} "
+                f"len={_fmt(val_stats,'length_loss')} "
+                f"kl={_fmt(val_stats,'kl_loss')})  "
+                f"beta={beta_now:.3f}  lr={lr_now:.2e}  ({elapsed:.1f}s){flag}"
             )
 
             history.append({"epoch": epoch, "train": train_stats, "val": val_stats})

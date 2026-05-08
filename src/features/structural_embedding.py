@@ -13,9 +13,10 @@ from src.io.annotation_io import load_annotations
 # Fixed encoding for segment types
 # -------------------------------------------------------------------
 TYPE_TO_ONEHOT = {
-    "CP":  [1.0, 0.0, 0.0],
-    "SIL": [0.0, 1.0, 0.0],
-    "STA": [0.0, 0.0, 1.0],
+    "CP":  [1.0, 0.0, 0.0, 0.0],
+    "SIL": [0.0, 1.0, 0.0, 0.0],
+    "STA": [0.0, 0.0, 1.0, 0.0],
+    "TR":  [0.0, 0.0, 0.0, 1.0],
 }
 
 
@@ -224,8 +225,6 @@ def compute_structural_embeddings_by_annotation(
         segments = assign_segment_cents(
             segments=segments,
             df_svara=df_svara,
-            df_full=df_pitch,
-            tau_init_sil=tau_init_sil,
             local_peak_map=local_peak_map,
         )
 
@@ -329,79 +328,57 @@ def build_segments_for_one_svara(
     """
     Build structural segments for one svara.
 
-    Important rule:
-    Peaks start new STA segments.
-    Therefore, if a peak occurs at local index i, index i belongs to the new STA.
-    """
+    Segment types:
+      CP  — voiced flat region; cents = median.
+      STA — voiced non-flat ending AT a peak (peak is last sample);
+             cents = peak value.
+      TR  — voiced non-flat ending at CP or SIL (no peak crossed);
+             cents = 0 (transition, no absolute pitch).
+      SIL — unvoiced; cents = 0.
 
+    The peak is the ENDPOINT of STA, not the start.  After an STA the
+    descent back to the next CP naturally becomes the next TR segment.
+    """
     labels = df_svara["sample_label"].to_numpy()
     N = len(labels)
-
     segments: list[dict] = []
     i = 0
 
     while i < N:
         label = labels[i]
 
-        # --------------------------------------------------
-        # SIL run
-        # --------------------------------------------------
         if label == "SIL":
             start = i
             while i < N and labels[i] == "SIL":
                 i += 1
-
-            segments.append({
-                "type": "SIL",
-                "start": start,
-                "end": i,   # Python-style exclusive end
-            })
+            segments.append({"type": "SIL", "start": start, "end": i})
             continue
 
-        # --------------------------------------------------
-        # CP run
-        # --------------------------------------------------
         if label == "CP":
             start = i
             while i < N and labels[i] == "CP":
                 i += 1
-
-            segments.append({
-                "type": "CP",
-                "start": start,
-                "end": i,
-            })
+            segments.append({"type": "CP", "start": start, "end": i})
             continue
 
-        # --------------------------------------------------
-        # STA segment
-        # --------------------------------------------------
-        # We are at a voiced non-flat sample.
-        # This must start an STA.
+        # Voiced non-flat: advance until CP / SIL / peak (inclusive).
         start = i
         i += 1
+        ended_at_peak = False
 
         while i < N:
-            # Stop if we encounter silence
             if labels[i] == "SIL":
                 break
-
-            # Stop if we encounter flat region
             if labels[i] == "CP":
                 break
-
-            # Stop if current index is a peak,
-            # because that peak belongs to the NEXT STA
             if i in local_peak_map:
+                i += 1          # include the peak sample in this segment
+                ended_at_peak = True
                 break
-
             i += 1
 
-        segments.append({
-            "type": "STA",
-            "start": start,
-            "end": i,
-        })
+        seg_type = "STA" if ended_at_peak else "TR"
+        segments.append({"type": seg_type, "start": start, "end": i})
 
     return segments
 
@@ -410,123 +387,41 @@ def build_segments_for_one_svara(
 def assign_segment_cents(
     segments: list[dict],
     df_svara: pl.DataFrame,
-    df_full: pl.DataFrame,
-    tau_init_sil: float,
     local_peak_map: dict[int, tuple[float, str]],
 ) -> list[dict]:
     """
     Assign one representative cents value to each segment.
 
-    Segment pitch conventions:
-    - CP: median pitch of the flat region
-    - SIL: inherited boundary pitch
-    - STA: boundary-based pitch:
-        * after SIL -> first pitch of STA
-        * after CP  -> last pitch of CP
-        * at peak   -> peak value_savgol_cents
+    CP  → median of the flat region
+    STA → peak value at the end of the segment
+    TR  → 0.0  (transition, no absolute pitch)
+    SIL → 0.0  (silence, no pitch)
     """
-
     cents = df_svara["f0_savgol_p3_w13_cents"].to_numpy()
-    times = df_svara["time_rel_sec"].to_numpy()
-    global_rows = df_svara["row_idx"].to_numpy()
-    full_cents = df_full["f0_savgol_p3_w13_cents"].to_numpy()
 
-    for k, seg in enumerate(segments):
+    for seg in segments:
         typ = seg["type"]
-        s = seg["start"]
-        e = seg["end"]
+        s   = seg["start"]
+        e   = seg["end"]
 
-        # --------------------------------------------------
-        # CP
-        # --------------------------------------------------
         if typ == "CP":
             vals = cents[s:e]
             vals = vals[np.isfinite(vals)]
-            seg["cents"] = float(np.median(vals)) if len(vals) else np.nan
-            continue
+            seg["cents"] = float(np.median(vals)) if len(vals) else 0.0
 
-        # --------------------------------------------------
-        # SIL
-        # --------------------------------------------------
-        if typ == "SIL":
-
-            # Non-initial SIL inherits the last voiced pitch before silence
-            if k > 0:
-                prev_seg = segments[k - 1]
-                prev_idx = prev_seg["end"] - 1
-                seg["cents"] = float(cents[prev_idx])
-                continue
-
-            # Initial SIL: duration-dependent rule
-            if e > s:
-                dur_sec = float(times[e - 1] - times[s])
+        elif typ == "STA":
+            # Peak should be the last sample (e-1); find it in local_peak_map.
+            peak_in_seg = {k: v for k, v in local_peak_map.items() if s <= k < e}
+            if peak_in_seg:
+                seg["cents"] = float(peak_in_seg[max(peak_in_seg)][0])
             else:
-                dur_sec = 0.0
+                # Fallback: endpoint value (should not normally happen)
+                vals = cents[s:e]
+                vals = vals[np.isfinite(vals)]
+                seg["cents"] = float(vals[-1]) if len(vals) else 0.0
 
-            # Short initial silence -> inherit previous global voiced pitch
-            if dur_sec < tau_init_sil:
-                g = int(global_rows[s]) - 1
-                found = False
-
-                while g >= 0:
-                    v = full_cents[g]
-                    if np.isfinite(v):
-                        seg["cents"] = float(v)
-                        found = True
-                        break
-                    g -= 1
-
-                if found:
-                    continue
-
-            # Long initial silence -> use first following voiced pitch
-            j = e
-            found = False
-            while j < len(cents):
-                v = cents[j]
-                if np.isfinite(v):
-                    seg["cents"] = float(v)
-                    found = True
-                    break
-                j += 1
-
-            if found:
-                continue
-
-            seg["cents"] = np.nan
-            continue
-
-        # --------------------------------------------------
-        # STA
-        # --------------------------------------------------
-        if typ == "STA":
-
-            # If this STA starts on a peak, use the peak raw-cents value
-            if s in local_peak_map:
-                seg["cents"] = float(local_peak_map[s][0])
-                continue
-
-            # Initial STA -> first value
-            if k == 0:
-                seg["cents"] = float(cents[s])
-                continue
-
-            prev_seg = segments[k - 1]
-            prev_type = prev_seg["type"]
-
-            # SIL -> STA
-            if prev_type == "SIL":
-                seg["cents"] = float(cents[s])
-                continue
-
-            # CP -> STA
-            if prev_type == "CP":
-                seg["cents"] = float(cents[prev_seg["end"] - 1])
-                continue
-
-            # Fallback
-            seg["cents"] = float(cents[s])
-            continue
+        else:  # TR or SIL
+            seg["cents"] = 0.0
 
     return segments
 
@@ -545,7 +440,7 @@ def encode_segments(
         [total_duration, s_1, s_2, ..., s_K, padding]
 
     Segment format:
-        [onehot_1, onehot_2, onehot_3, duration_rel, cents]
+        [onehot_CP, onehot_SIL, onehot_STA, onehot_TR, duration_rel, cents]
     """
 
     times = df_svara["time_rel_sec"].to_numpy()
@@ -571,7 +466,7 @@ def encode_segments(
             [dur_rel, float(seg["cents"])]
         )
 
-    dim_per_seg = 5
+    dim_per_seg = 6   # 4 onehot + dur_rel + cents
     n_pad = max_segments - len(used_segments)
     vec.extend([0.0] * (n_pad * dim_per_seg))
 

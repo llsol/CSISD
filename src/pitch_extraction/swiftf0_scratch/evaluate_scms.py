@@ -191,6 +191,8 @@ def main():
     )
     parser.add_argument("--thr",          type=float, default=0.9)
     parser.add_argument("--sweep",        action="store_true")
+    parser.add_argument("--sweep-all",    action="store_true",
+                        help="Print scores at every threshold (implies --sweep)")
     parser.add_argument("--run-scratch",  default=None, help="SwiftF0-scratch run dir")
     parser.add_argument("--run-fine",     default=None, help="SwiftF0-finetune run dir")
     parser.add_argument("--sources",      nargs="+", default=["original", "as"],
@@ -281,21 +283,29 @@ def main():
         print_row(name, "—", b, note="← paper")
     print(sep)
 
-    thresholds = THRESHOLDS_SWEEP if args.sweep else [args.thr]
+    do_sweep   = args.sweep or args.sweep_all
+    thresholds = THRESHOLDS_SWEEP if do_sweep else [args.thr]
 
     for source in args.sources:
         for extractor_label, key in SYSTEMS:
             est_t, est_p, est_c = predictions[(key, source)]
 
-            if args.sweep and est_c is not None:
+            if do_sweep and est_c is not None:
                 best_oa, best_scores, best_thr = -1.0, {}, args.thr
                 for thr in thresholds:
                     est_f = [apply_threshold(p, c, thr) for p, c in zip(est_p, est_c)]
                     sc = evaluate(ref_times, ref_freqs, est_t, est_f)
+                    if args.sweep_all:
+                        print_row(extractor_label, source, sc, note=f"thr={thr:.2f}")
                     if sc.get("Overall Accuracy", 0) > best_oa:
                         best_oa, best_scores, best_thr = sc["Overall Accuracy"], sc, thr
-                print_row(extractor_label, source, best_scores,
-                          note=f"← best thr={best_thr:.2f}")
+                if args.sweep_all:
+                    print_row(extractor_label, source, best_scores,
+                              note=f"^ best thr={best_thr:.2f}")
+                    print()
+                else:
+                    print_row(extractor_label, source, best_scores,
+                              note=f"← best thr={best_thr:.2f}")
             else:
                 thr = args.thr
                 est_f = [apply_threshold(p, c, thr) for p, c in zip(est_p, est_c)] \
