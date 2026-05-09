@@ -66,24 +66,36 @@ def load_model(run: str | None, device: torch.device) -> SvaraGRUVAE:
 # ── generation ────────────────────────────────────────────────────────────────
 
 def generate(
-    model:         SvaraGRUVAE,
-    svara_label:   str,
-    n:             int,
-    device:        torch.device,
-    use_hard_mask: bool = False,
+    model:          SvaraGRUVAE,
+    svara_label:    str,
+    n:              int,
+    device:         torch.device,
+    use_hard_mask:  bool                      = False,
+    length_noise:   float                     = 0.0,
+    total_dur_sec:  float | list | None       = None,
 ) -> list[dict]:
     idx_t = torch.tensor(
         [SVARA_TO_IDX[svara_label]] * n, dtype=torch.long, device=device
     )
+    if total_dur_sec is None:
+        dur_t = None
+    elif isinstance(total_dur_sec, (int, float)):
+        dur_t = torch.full((n,), float(total_dur_sec), dtype=torch.float32, device=device)
+    else:
+        dur_t = torch.tensor(list(total_dur_sec), dtype=torch.float32, device=device)
     with torch.no_grad():
         out      = model.generate(batch_size=n, svara_idx=idx_t, device=device,
-                                  use_hard_mask=use_hard_mask)
+                                  total_dur=dur_t, use_hard_mask=use_hard_mask)
     gen       = out["generated"]         # (n, max_len, 6): [CP, SIL, STA, TR, dur_rel, cents_norm]
-    pred_lens = out["pred_length"]       # (n,)
+    pred_lens = out["pred_length"].float().cpu()  # (n,)
 
     results = []
     for i in range(n):
-        n_segs = int(pred_lens[i].round().clamp(1, model.cfg.max_seq_len).item())
+        raw = pred_lens[i]
+        if length_noise > 0.0:
+            raw = raw + torch.randn(1).item() * length_noise
+        n_segs = int(round(float(raw)))
+        n_segs = max(1, min(n_segs, model.cfg.max_seq_len))
         segs   = gen[i, :n_segs].cpu().numpy()
 
         segments = []
@@ -190,6 +202,9 @@ def main() -> None:
                         help="Output PNG path (default: data/interim/gruvae_generated.png)")
     parser.add_argument("--hard-mask", action="store_true",
                         help="Enforce musical grammar during generation (type transition mask)")
+    parser.add_argument("--dur", type=float, default=None,
+                        help="Total svara duration in seconds used as conditioning "
+                             "(default: None → model uses zero/unconditioned)")
     args = parser.parse_args()
 
     device   = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -212,7 +227,8 @@ def main() -> None:
     )
 
     for r, svara in enumerate(svaras):
-        samples = generate(model, svara, args.n, device, use_hard_mask=args.hard_mask)
+        samples = generate(model, svara, args.n, device,
+                           use_hard_mask=args.hard_mask, total_dur_sec=args.dur)
         for c, sv_data in enumerate(samples):
             plot_svara(axes[r][c], sv_data, title=f"{svara} #{c + 1}")
 

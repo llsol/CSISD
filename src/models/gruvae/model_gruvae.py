@@ -41,11 +41,14 @@ MODEL_INPUT_DIM = 6   # == len(DATASET_FEATURE_COLS)
 # Musical grammar: which types can follow each type.
 # TR→{CP} only; TR at end-of-sequence is fine (no successor needed).
 VALID_NEXT: dict[int, set[int]] = {
-    0: {0, 1, 2, 3},  # CP  → CP, SIL, STA, TR
+    0: {1, 2, 3},     # CP  → SIL, STA, TR  (no CP→CP: force break after stable region)
     1: {0, 2, 3},     # SIL → CP, STA, TR
-    2: {1, 2, 3},     # STA → SIL, STA, TR
+    2: {1, 2, 3},     # STA → SIL, STA, TR  (STA→CP forbidden: always via TR by definition)
     3: {0},           # TR  → CP only
 }
+
+# Number of svara labels — always 7, constant across config variants
+_N_SVARA = 7
 
 
 # ------------------------------------------------------------
@@ -64,8 +67,9 @@ class ModelConfig:
     condition_z_every_step: bool  = True
     teacher_forcing_ratio:  float = 1.0
 
-    # Conditional VAE: condition decoder on svara label one-hot
-    # Set svara_cond_dim = 0 to disable (unconditional VAE)
+    # Conditional VAE: condition decoder on svara label one-hot + log1p(total_dur_sec).
+    # 7 = svara one-hot only (backward compat); 8 = svara one-hot + duration scalar.
+    # Set 0 to disable conditioning entirely.
     svara_cond_dim:         int   = 7
 
     lambda_type:            float = 1.0
@@ -75,7 +79,7 @@ class ModelConfig:
     lambda_cp_cents:        float = 2.0   # CP pitch — discriminative but performer-dependent
     lambda_sta_cents:       float = 5.0   # STA pitch — peak value, most musicologically relevant
     lambda_length:          float = 0.1   # weight for n_segments prediction loss
-    lambda_dur_tr:          float = 0.1   # TR duration — return time, informative
+    lambda_dur_tr:          float = 0.135   # TR duration — return time, informative
 
     use_attention:          bool  = True   # pool all GRU states via learned attention
 
@@ -311,19 +315,38 @@ class SvaraGRUVAE(nn.Module):
         norm = torch.sigmoid(self.length_head(z).squeeze(-1))   # (0, 1)
         return (norm * self.cfg.max_seq_len).clamp(min=1.0)
 
-    def _make_cond(self, svara_idx: torch.Tensor | None, batch_size: int, device: torch.device) -> torch.Tensor:
-        """One-hot condition vector (batch, svara_cond_dim). Zeros if cond disabled or idx is None."""
+    def _make_cond(
+        self,
+        svara_idx: torch.Tensor | None,
+        total_dur: torch.Tensor | None,
+        batch_size: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        """Condition vector (batch, svara_cond_dim).
+        svara_cond_dim == 0: empty (unconditional).
+        svara_cond_dim == 7: svara one-hot only.
+        svara_cond_dim == 8: svara one-hot + log1p(total_dur_sec).
+        """
         if self.cfg.svara_cond_dim == 0:
             return torch.zeros(batch_size, 0, device=device)
         if svara_idx is None:
-            return torch.zeros(batch_size, self.cfg.svara_cond_dim, device=device)
-        return F.one_hot(svara_idx, num_classes=self.cfg.svara_cond_dim).float()
+            svara_oh = torch.zeros(batch_size, _N_SVARA, device=device)
+        else:
+            svara_oh = F.one_hot(svara_idx, num_classes=_N_SVARA).float()
+        if self.cfg.svara_cond_dim <= _N_SVARA:
+            return svara_oh
+        if total_dur is None:
+            dur_feat = torch.zeros(batch_size, 1, device=device)
+        else:
+            dur_feat = torch.log1p(total_dur.float().to(device)).unsqueeze(-1)
+        return torch.cat([svara_oh, dur_feat], dim=-1)
 
     def forward(
         self,
         x: torch.Tensor,
         lengths: torch.Tensor,
         svara_idx: torch.Tensor | None = None,
+        total_dur: torch.Tensor | None = None,
         teacher_forcing_ratio: float | None = None,
     ) -> dict:
         if teacher_forcing_ratio is None:
@@ -331,7 +354,7 @@ class SvaraGRUVAE(nn.Module):
 
         mu, logvar, attn_w = self.encoder(x, lengths)
         z = self.reparameterize(mu, logvar)
-        cond = self._make_cond(svara_idx, x.size(0), x.device)
+        cond = self._make_cond(svara_idx, total_dur, x.size(0), x.device)
         decoded = self.decoder(
             z, cond, target_seq=x,
             teacher_forcing_ratio=teacher_forcing_ratio,
@@ -348,6 +371,7 @@ class SvaraGRUVAE(nn.Module):
         batch_size: int = 1,
         z: torch.Tensor | None = None,
         svara_idx: torch.Tensor | None = None,
+        total_dur: torch.Tensor | None = None,
         max_len: int | None = None,
         device: torch.device | None = None,
         use_hard_mask: bool = False,
@@ -357,7 +381,7 @@ class SvaraGRUVAE(nn.Module):
         if z is None:
             z = torch.randn(batch_size, self.cfg.latent_dim, device=device)
 
-        cond = self._make_cond(svara_idx, z.size(0), device)
+        cond = self._make_cond(svara_idx, total_dur, z.size(0), device)
 
         self.eval()
         with torch.no_grad():
@@ -520,11 +544,12 @@ def train_step(
     optimizer: torch.optim.Optimizer,
     global_step: int,
     warmup_steps: int = 1000,
+    total_dur: torch.Tensor | None = None,
 ) -> dict:
     model.train()
     optimizer.zero_grad()
     beta = linear_kl_beta(global_step, warmup_steps)
-    outputs = model(batch_x, batch_lengths)
+    outputs = model(batch_x, batch_lengths, total_dur=total_dur)
     loss, stats = total_vae_loss(outputs, batch_x, batch_lengths, model.cfg, beta=beta)
     loss.backward()
     optimizer.step()

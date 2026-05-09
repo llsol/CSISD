@@ -67,9 +67,9 @@ TYPE_ORD = ["CP", "SIL", "STA", "TR"]
 TYPE_IDX = {t: i for i, t in enumerate(TYPE_ORD)}
 
 VALID_NEXT: dict[str, set[str]] = {
-    "CP":  {"CP", "SIL", "STA", "TR"},
+    "CP":  {"SIL", "STA", "TR"},   # no CP→CP: force break after stable region
     "SIL": {"CP", "STA", "TR"},
-    "STA": {"SIL", "STA", "TR"},
+    "STA": {"SIL", "STA", "TR"},   # no STA→CP: always via TR by definition
     "TR":  {"CP"},
 }
 
@@ -120,28 +120,34 @@ def _feats_from_sample(sv_data: dict) -> dict:
     }
 
 
-def load_gt_data(svaras: list[str]) -> tuple[list[dict], dict[str, list[list[str]]]]:
+def load_gt_data(
+    svaras: list[str],
+) -> tuple[list[dict], dict[str, list[list[str]]], dict[str, list[float]]]:
     """
-    Returns (gt_rows, gt_seqs_by_svara).
+    Returns (gt_rows, gt_seqs_by_svara, gt_durs_by_svara).
     gt_rows: feature dicts (scalar, same keys as _feats_from_sample minus _type_seq)
     gt_seqs_by_svara: {svara: [[type_seq], ...]}
+    gt_durs_by_svara: {svara: [total_dur_sec, ...]}  — for conditioning generation
     """
     print("[compare_gen] loading GT svaras (feature stats + type sequences)...")
     all_rows, _, svara_labels, _ = load_all()
     gt_rows = [{k: v for k, v in r.items() if not isinstance(v, list)} for r in all_rows]
 
-    # build type sequences from dataset builder (re-uses same segment logic)
+    # build type sequences + duration distribution from dataset builder
     print("[compare_gen] building GT type sequences via dataset builder...")
     corpus_seqs = build_corpus_sequences()   # list of {svara_label, sequence: (n,7)}
-    gt_seqs: dict[str, list[list[str]]] = {sv: [] for sv in svaras}
+    gt_seqs: dict[str, list[list[str]]]  = {sv: [] for sv in svaras}
+    gt_durs: dict[str, list[float]]      = {sv: [] for sv in svaras}
     for item in corpus_seqs:
         sv = item["svara_label"]
         if sv in gt_seqs:
             seq = item["sequence"]          # (n_segs, 7): first 4 cols are one-hot type
             types = [TYPE_ORD[int(np.argmax(row[:4]))] for row in seq]
             gt_seqs[sv].append(types)
+            if len(seq) > 0:
+                gt_durs[sv].append(float(seq[0, 5]))   # col 5 = total_dur_sec
 
-    return gt_rows, gt_seqs
+    return gt_rows, gt_seqs, gt_durs
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -320,12 +326,11 @@ def propose_adjustments(summary, cfg, svaras, out_dir):
             sta_delta = summary["sta_frac"]["pooled"]["delta"]
             if delta < 0:
                 lines += ["               → model under-generates STA segments",
-                          "                 Hard-rule options (pick one):",
-                          "                   1. Allow STA→CP: VALID_NEXT['STA'].add('CP')",
-                          "                      Risk: skips return glide (TR) — less musical",
-                          "                   2. Keep rules; reduce lambda_dur_sta if also sta_frac low"]
+                          "                 Note: STA→CP forbidden by grammar (TR always required)."]
                 if abs(sta_delta) > 0.05:
-                    lines.append("                   3. Reduce lambda_dur_sta (see above)")
+                    lines.append("                 1. Reduce lambda_dur_sta (see above)")
+                lines += ["                 2. Check SIL→STA fires (already allowed ✓)",
+                          "                 3. Accept: model may learn longer single-STA patterns"]
             else:
                 lines += ["               → model over-generates STA segments",
                           "                 Hard-rule: restrict STA→STA: VALID_NEXT['STA'] -= {'STA'}",
@@ -666,6 +671,9 @@ def main() -> None:
                         help="Generated samples per svara label (default: 300)")
     parser.add_argument("--hard-mask", action="store_true",
                         help="Use musical grammar mask during generation")
+    parser.add_argument("--length-noise", type=float, default=1.0,
+                        help="Gaussian noise std added to predicted length before rounding "
+                             "(allows 1–2 segment svaras; default: 1.0, set 0 to disable)")
     args = parser.parse_args()
 
     device   = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -677,7 +685,7 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # ── ground truth ──────────────────────────────────────────────────────────
-    gt_rows, gt_seqs = load_gt_data(
+    gt_rows, gt_seqs, gt_durs = load_gt_data(
         [s for s in SCALE_ORDER_PRESENT]
     )
     svaras = [s for s in SCALE_ORDER_PRESENT
@@ -689,8 +697,14 @@ def main() -> None:
           f"({'hard-mask' if args.hard_mask else 'soft'})...")
     gen_rows: list[dict] = []
     gen_seqs: dict[str, list[list[str]]] = {sv: [] for sv in svaras}
+    rng = np.random.default_rng(0)
     for sv in svaras:
-        samples = generate(model, sv, args.n, device, use_hard_mask=args.hard_mask)
+        durs = gt_durs.get(sv) or [1.0]
+        sampled_durs = rng.choice(durs, size=args.n, replace=True).tolist()
+        samples = generate(model, sv, args.n, device,
+                           use_hard_mask=args.hard_mask,
+                           length_noise=args.length_noise,
+                           total_dur_sec=sampled_durs)
         for sv_data in samples:
             feat = _feats_from_sample(sv_data)
             gen_seqs[sv].append(feat.pop("_type_seq"))

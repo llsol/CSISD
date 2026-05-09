@@ -55,7 +55,7 @@ MODEL_CFG = ModelConfig(
     num_layers   = 1,    # 1 layer: simpler decoder, less able to memorize
     dropout      = 0.0,  # no dropout with 1 layer (PyTorch ignores it anyway)
     max_seq_len  = 15,   # límit per generate(); training usa padding dinàmic
-    svara_cond_dim = 7,  # cVAE: condicionat per label de svara (D,G,M,N,P,R,S)
+    svara_cond_dim = 8,  # cVAE: svara one-hot (7) + log1p(total_dur_sec) (1)
     condition_z_every_step = True,
     teacher_forcing_ratio  = 0.0,   # decoder never sees real prev token → must use z
     lambda_type      = 0.2,
@@ -139,9 +139,11 @@ def _val_epoch(
     model.eval()
     totals: dict[str, float] = {}
     n_batches = 0
-    for x, lengths, svara_idx in loader:
-        x, lengths, svara_idx = x.to(device), lengths.to(device), svara_idx.to(device)
-        outputs = model(x, lengths, svara_idx=svara_idx, teacher_forcing_ratio=0.0)
+    for x, lengths, svara_idx, total_dur in loader:
+        x, lengths = x.to(device), lengths.to(device)
+        svara_idx, total_dur = svara_idx.to(device), total_dur.to(device)
+        outputs = model(x, lengths, svara_idx=svara_idx, total_dur=total_dur,
+                        teacher_forcing_ratio=0.0)
         beta = min(model.cfg.beta, linear_kl_beta(global_step, WARMUP_STEPS))
         _, stats = total_vae_loss(outputs, x, lengths, model.cfg, beta=beta)
         for k, v in stats.items():
@@ -251,11 +253,12 @@ def train(
             model.train()
             train_totals: dict[str, float] = {}
             n_batches = 0
-            for x, lengths, svara_idx in train_loader:
-                x, lengths, svara_idx = x.to(device), lengths.to(device), svara_idx.to(device)
+            for x, lengths, svara_idx, total_dur in train_loader:
+                x, lengths = x.to(device), lengths.to(device)
+                svara_idx, total_dur = svara_idx.to(device), total_dur.to(device)
                 optimizer.zero_grad()
                 beta    = min(model_cfg.beta, linear_kl_beta(global_step, warmup_steps))
-                outputs = model(x, lengths, svara_idx=svara_idx)
+                outputs = model(x, lengths, svara_idx=svara_idx, total_dur=total_dur)
                 loss, stats = total_vae_loss(outputs, x, lengths, model_cfg, beta=beta)
                 loss.backward()
                 optimizer.step()

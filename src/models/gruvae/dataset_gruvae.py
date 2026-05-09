@@ -304,18 +304,19 @@ class SvaraDataset(Dataset):
     def __len__(self) -> int:
         return len(self._sequences)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int, int]:
-        seq = self._sequences[idx]                      # (n_segments, 6)
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int, int, float]:
+        seq = self._sequences[idx]                      # (n_segments, INPUT_DIM=7) raw
+        total_dur_sec = float(seq[0, 5])                # col 5 = total_dur_sec (same for all rows)
         if self.feature_cols is not None:
             seq = seq[:, self.feature_cols]             # (n_segments, n_feats)
         svara_idx = SVARA_TO_IDX.get(self._svara_labels[idx], 0)
-        return torch.from_numpy(seq), seq.shape[0], svara_idx
+        return torch.from_numpy(seq), seq.shape[0], svara_idx, total_dur_sec
 
 
 def collate_svara_batch(
-    batch: list[tuple[torch.Tensor, int, int]],
+    batch: list[tuple[torch.Tensor, int, int, float]],
     max_len: int | None = None,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Collate function for DataLoader.
 
@@ -324,10 +325,12 @@ def collate_svara_batch(
     padded     : (batch, max_len, n_feats)  float32
     lengths    : (batch,)                   int64
     svara_idxs : (batch,)                   int64
+    total_durs : (batch,)                   float32  — total_dur_sec per svara
     """
-    seqs, lengths, svara_idxs = zip(*batch)
+    seqs, lengths, svara_idxs, total_durs = zip(*batch)
     lengths_t    = torch.tensor(lengths,    dtype=torch.long)
     svara_idxs_t = torch.tensor(svara_idxs, dtype=torch.long)
+    total_durs_t = torch.tensor(total_durs, dtype=torch.float32)
 
     if max_len is None:
         max_len = int(lengths_t.max().item())
@@ -337,7 +340,7 @@ def collate_svara_batch(
     for i, (seq, length) in enumerate(zip(seqs, lengths)):
         padded[i, :length] = seq[:length]
 
-    return padded, lengths_t, svara_idxs_t
+    return padded, lengths_t, svara_idxs_t, total_durs_t
 
 
 def build_dataloader(

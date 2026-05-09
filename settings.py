@@ -74,6 +74,15 @@ MAX_RESIDUAL_CENTS = 25.0        # RMS deviation from best-fit line; None = disa
 # opcional (si vols guardar-ho al parquet per inspecció)
 ABS_DERIV1_COL = "abs_deriv1_cents_per_sec"
 
+# CP generation post-processing (cp_vae.py)
+# Savitzky-Golay smoothing applied to generated curves before rejection filter
+CP_SAVGOL_WINDOW    = 11   # must be odd; applied over L_CANONICAL=64 samples
+CP_SAVGOL_POLYORDER = 3
+
+# Rejection sampling: generated curves must pass the same flatness criteria
+# as the GT CP curves (same params as extract_flat_regions above).
+# TOLERANCE_CENTS, MAX_SLOPE_CENTS_PER_SEC, MAX_RESIDUAL_CENTS are reused.
+
 
 
 
