@@ -42,18 +42,28 @@ def run_mi_analysis(df, svara_labels, performers, out_dir: Path) -> None:
     # ── Feature definitions ──────────────────────────────────────────────────────
     # [A] segment-level  [B] occurrence-level totals  [C] run-level  [D] pitch
     STRUCT_FEATS = [
-        'svara_dur_sec',                                        # [B] total svara duration
-        'n_cp',   'cp_total_dur_sec', 'cp_frac',               # [A/B] CP segment count + totals
-        'n_sta',  'sta_total_dur_sec', 'sta_frac',             # [A/B] STA segment count + totals
-        'n_tr',   'tr_total_dur_sec',  'tr_frac',              # [A/B] TR segment count + totals
-        'sil_total_dur_sec', 'sil_frac',                       # [B] SIL total
-        'n_cp_runs',  'cp_run_mean_dur',                       # [C] CP run structure
-        'n_sta_runs', 'sta_run_mean_dur',                      # [C] STA run structure
-        'n_tr_runs',  'tr_run_mean_dur',                       # [C] TR run structure
+        'svara_dur_sec',                                          # [B] total svara duration
+        'n_cp',   'cp_total_dur_sec', 'cp_frac',                 # [A/B] CP segment count + totals
+        'n_sta',  'sta_total_dur_sec', 'sta_frac',               # [A/B] STA aggregate
+        'n_stap', 'stap_total_dur_sec', 'stap_frac',             # [A/B] STAp (peaks)
+        'n_stat', 'stat_total_dur_sec', 'stat_frac',             # [A/B] STAt (troughs)
+        'n_tr',   'tr_total_dur_sec',  'tr_frac',                # [A/B] TR aggregate
+        'n_tra',  'tra_total_dur_sec', 'tra_frac',               # [A/B] TRa (ascending)
+        'n_trd',  'trd_total_dur_sec', 'trd_frac',               # [A/B] TRd (descending)
+        'sil_total_dur_sec', 'sil_frac',                         # [B] SIL total
+        'n_cp_runs',   'cp_run_mean_dur',                        # [C] CP run structure
+        'n_sta_runs',  'sta_run_mean_dur',                       # [C] STA aggregate runs
+        'n_stap_runs', 'stap_run_mean_dur',                      # [C] STAp runs
+        'n_stat_runs', 'stat_run_mean_dur',                      # [C] STAt runs
+        'n_tr_runs',   'tr_run_mean_dur',                        # [C] TR aggregate runs
+        'n_tra_runs',  'tra_run_mean_dur',                       # [C] TRa runs
+        'n_trd_runs',  'trd_run_mean_dur',                       # [C] TRd runs
     ]
     PITCH_FEATS = [
         'cp_mean_cents',
         'sta_mean_cents',         'sta_std_cents',
+        'stap_mean_cents',        'stap_std_cents',
+        'stat_mean_cents',        'stat_std_cents',
         'sta_peaks_mean_cents',   'sta_peaks_std_cents',
         'sta_valleys_mean_cents', 'sta_valleys_std_cents',
     ]
@@ -67,20 +77,44 @@ def run_mi_analysis(df, svara_labels, performers, out_dir: Path) -> None:
         'n_sta':                  'n STA segs',
         'sta_total_dur_sec':      'STA total dur (s)',
         'sta_frac':               'STA frac',
+        'n_stap':                 'n STAp segs',
+        'stap_total_dur_sec':     'STAp total dur (s)',
+        'stap_frac':              'STAp frac',
+        'n_stat':                 'n STAt segs',
+        'stat_total_dur_sec':     'STAt total dur (s)',
+        'stat_frac':              'STAt frac',
         'n_tr':                   'n TR segs',
         'tr_total_dur_sec':       'TR total dur (s)',
         'tr_frac':                'TR frac',
+        'n_tra':                  'n TRa segs',
+        'tra_total_dur_sec':      'TRa total dur (s)',
+        'tra_frac':               'TRa frac',
+        'n_trd':                  'n TRd segs',
+        'trd_total_dur_sec':      'TRd total dur (s)',
+        'trd_frac':               'TRd frac',
         'sil_total_dur_sec':      'SIL total dur (s)',
         'sil_frac':               'SIL frac',
         'n_cp_runs':              'n CP runs',
         'cp_run_mean_dur':        'CP run mean dur',
         'n_sta_runs':             'n STA runs',
         'sta_run_mean_dur':       'STA run mean dur',
+        'n_stap_runs':            'n STAp runs',
+        'stap_run_mean_dur':      'STAp run mean dur',
+        'n_stat_runs':            'n STAt runs',
+        'stat_run_mean_dur':      'STAt run mean dur',
         'n_tr_runs':              'n TR runs',
         'tr_run_mean_dur':        'TR run mean dur',
+        'n_tra_runs':             'n TRa runs',
+        'tra_run_mean_dur':       'TRa run mean dur',
+        'n_trd_runs':             'n TRd runs',
+        'trd_run_mean_dur':       'TRd run mean dur',
         'cp_mean_cents':          'CP mean cents',
         'sta_mean_cents':         'STA mean cents',
         'sta_std_cents':          'STA std cents',
+        'stap_mean_cents':        'STAp mean ¢',
+        'stap_std_cents':         'STAp std ¢',
+        'stat_mean_cents':        'STAt mean ¢',
+        'stat_std_cents':         'STAt std ¢',
         'sta_peaks_mean_cents':   'STA peaks mean ¢',
         'sta_peaks_std_cents':    'STA peaks std ¢',
         'sta_valleys_mean_cents': 'STA valleys mean ¢',

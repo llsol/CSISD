@@ -199,17 +199,14 @@ def _extract_one_recording(
             if seg["type"] == "CP":
                 base["concavity"] = _concavity(raw_valid)
 
-            elif seg["type"] in ("STA", "TR"):
+            elif seg["type"] in ("STAp", "STAt", "TRa", "TRd"):
                 if len(raw_valid) < min_samples_sta_tr:
                     continue
                 delta = raw_valid[-1] - raw_valid[0]
                 if abs(delta) < 1e-6:
                     continue
                 t_norm = np.linspace(0.0, 1.0, len(raw_valid))
-                if seg["type"] == "STA":
-                    p_norm = (raw_valid - raw_valid[0]) / delta
-                else:  # TR: normalize 1→0
-                    p_norm = (raw_valid - raw_valid[-1]) / (-delta)
+                p_norm = (raw_valid - raw_valid[0]) / delta   # 0→1 for both STA and TR
 
                 k, s, A, r2 = _fit_parametric(t_norm, p_norm)
                 base.update({"k_steep": k, "s_inflect": s, "A_osc": A, "r2": r2})
@@ -242,7 +239,7 @@ def build_sta_tr_pairs(df: pl.DataFrame, k: int) -> pl.DataFrame:
     Pair each STA/TR segment with its k-th STA/TR neighbour within the same svara.
     CP and SIL segments are invisible to the neighbour counter.
     """
-    df_st  = df.filter(pl.col("seg_type").is_in(["STA", "TR"])).sort(
+    df_st  = df.filter(pl.col("seg_type").is_in(["STAp", "STAt", "TRa", "TRd"])).sort(
         ["recording_id", "svara_ann_idx", "seg_idx"]
     )
     rows_i, rows_j = [], []
@@ -294,18 +291,18 @@ def build_cp_neighbours(df: pl.DataFrame) -> pl.DataFrame:
             # delta_next: look forward, skip TR, find first STA
             delta_next = np.nan
             for j in range(i + 1, len(g)):
-                if g[j]["seg_type"] == "TR":
+                if g[j]["seg_type"] in ("TRa", "TRd"):
                     continue
-                if g[j]["seg_type"] == "STA":
+                if g[j]["seg_type"] in ("STAp", "STAt"):
                     delta_next = g[j]["end_cents"] - seg["end_cents"]
                 break
 
             # delta_prev: look backward, skip TR, find first STA or CP
             delta_prev = np.nan
             for j in range(i - 1, -1, -1):
-                if g[j]["seg_type"] == "TR":
+                if g[j]["seg_type"] in ("TRa", "TRd"):
                     continue
-                if g[j]["seg_type"] in ("STA", "CP"):
+                if g[j]["seg_type"] in ("STAp", "STAt", "CP"):
                     delta_prev = seg["start_cents"] - g[j]["end_cents"]
                 break
 
@@ -342,7 +339,7 @@ def plot_sta_tr(df: pl.DataFrame, df_pairs: pl.DataFrame, k: int) -> None:
         ("A_osc",    "A (oscillation)"),
     ]):
         ax = fig.add_subplot(gs[0, col_i])
-        for stype, color in [("STA", "#ff9800"), ("TR", "#2196f3")]:
+        for stype, color in [("STAp", "#ff9800"), ("STAt", "#e65100"), ("TRa", "#2196f3"), ("TRd", "#0277bd")]:
             vals = df.filter(pl.col("seg_type") == stype)[param].drop_nulls().to_numpy()
             vals = vals[np.isfinite(vals)]
             ax.hist(vals, bins=30, alpha=0.6, color=color, label=stype, density=True)
@@ -366,7 +363,7 @@ def plot_sta_tr(df: pl.DataFrame, df_pairs: pl.DataFrame, k: int) -> None:
             ("i_s_inflect","j_s_inflect",  "s (curr)",  f"s (k={k} next)"),
         ]):
             ax = fig.add_subplot(gs[1, col_i])
-            for stype, color in [("STA", "#ff9800"), ("TR", "#2196f3")]:
+            for stype, color in [("STAp", "#ff9800"), ("STAt", "#e65100"), ("TRa", "#2196f3"), ("TRd", "#0277bd")]:
                 sub = df_pairs.filter(pl.col("i_seg_type") == stype)
                 x = sub[px].drop_nulls().to_numpy()
                 y = sub[py].drop_nulls().to_numpy()
@@ -386,7 +383,7 @@ def plot_sta_tr(df: pl.DataFrame, df_pairs: pl.DataFrame, k: int) -> None:
         ]):
             ax = fig.add_subplot(gs[2, col_i])
             if px == "i_seg_type":
-                for stype, color in [("STA", "#ff9800"), ("TR", "#2196f3")]:
+                for stype, color in [("STAp", "#ff9800"), ("STAt", "#e65100"), ("TRa", "#2196f3"), ("TRd", "#0277bd")]:
                     vals = df_pairs.filter(pl.col("i_seg_type") == stype)["i_A_osc"].to_numpy()
                     vals = vals[np.isfinite(vals)]
                     ax.hist(vals, bins=20, alpha=0.6, color=color, label=stype, density=True)
@@ -394,7 +391,7 @@ def plot_sta_tr(df: pl.DataFrame, df_pairs: pl.DataFrame, k: int) -> None:
                 ax.set_ylabel(ly, fontsize=7)
                 ax.legend(fontsize=6)
             else:
-                for stype, color in [("STA", "#ff9800"), ("TR", "#2196f3")]:
+                for stype, color in [("STAp", "#ff9800"), ("STAt", "#e65100"), ("TRa", "#2196f3"), ("TRd", "#0277bd")]:
                     sub = df_pairs.filter(pl.col("i_seg_type") == stype)
                     x = sub[px].to_numpy(); y = sub[py].to_numpy()
                     valid = np.isfinite(x) & np.isfinite(y)
@@ -407,21 +404,22 @@ def plot_sta_tr(df: pl.DataFrame, df_pairs: pl.DataFrame, k: int) -> None:
 
         # transition type heatmap (i_type → j_type)
         ax = fig.add_subplot(gs[2, 2])
-        types = ["STA", "TR"]
-        mat = np.zeros((2, 2))
+        types = ["STAp", "STAt", "TRa", "TRd"]
+        n_t = len(types)
+        mat = np.zeros((n_t, n_t))
         for ri, ti in enumerate(types):
             for ci, tj in enumerate(types):
                 mat[ri, ci] = len(df_pairs.filter(
                     (pl.col("i_seg_type") == ti) & (pl.col("j_seg_type") == tj)
                 ))
-        im = ax.imshow(mat, cmap="Blues")
-        ax.set_xticks([0, 1]); ax.set_yticks([0, 1])
-        ax.set_xticklabels(types, fontsize=7); ax.set_yticklabels(types, fontsize=7)
+        ax.imshow(mat, cmap="Blues")
+        ax.set_xticks(range(n_t)); ax.set_yticks(range(n_t))
+        ax.set_xticklabels(types, fontsize=6); ax.set_yticklabels(types, fontsize=6)
         ax.set_xlabel(f"j (k={k})", fontsize=7); ax.set_ylabel("i (curr)", fontsize=7)
         ax.set_title("Transition counts", fontsize=8)
-        for ri in range(2):
-            for ci in range(2):
-                ax.text(ci, ri, f"{int(mat[ri,ci])}", ha="center", va="center", fontsize=8)
+        for ri in range(n_t):
+            for ci in range(n_t):
+                ax.text(ci, ri, f"{int(mat[ri,ci])}", ha="center", va="center", fontsize=7)
 
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
     out = FIGURES_DIR / f"shape_sta_tr_k{k}.png"
@@ -505,8 +503,8 @@ def main() -> None:
     print(df.group_by("seg_type").agg(pl.len().alias("n")).sort("seg_type"))
 
     # STA/TR stats summary
-    df_st = df.filter(pl.col("seg_type").is_in(["STA", "TR"]))
-    print("\nSTA/TR parameter statistics:")
+    df_st = df.filter(pl.col("seg_type").is_in(["STAp", "STAt", "TRa", "TRd"]))
+    print("\nSTAp/STAt/TRa/TRd parameter statistics:")
     print(
         df_st.group_by("seg_type")
         .agg(

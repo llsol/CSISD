@@ -85,7 +85,7 @@ def analyse_one_recording(
     df_svaras,
 ) -> list[dict]:
     """
-    Per each annotated svara: extract CP/STA/TR/SIL segments and compute
+    Per each annotated svara: extract CP/STAp/STAt/TRa/TRd/SIL segments and compute
     duration, cents, and run-level features.
 
     Returns a list of dicts — one per svara occurrence.
@@ -117,33 +117,47 @@ def analyse_one_recording(
         dt        = float(np.median(np.diff(t_svara))) if len(t_svara) > 1 else 0.0
         svara_dur = float(t_end - t_start)
 
-        cp_segs  = [s for s in segments if s['type'] == 'CP']
-        sta_segs = [s for s in segments if s['type'] == 'STA']
-        sil_segs = [s for s in segments if s['type'] == 'SIL']
-        tr_segs  = [s for s in segments if s['type'] == 'TR']
+        cp_segs   = [s for s in segments if s['type'] == 'CP']
+        stap_segs = [s for s in segments if s['type'] == 'STAp']
+        stat_segs = [s for s in segments if s['type'] == 'STAt']
+        sta_segs  = stap_segs + stat_segs   # aggregate for backward compat
+        tra_segs  = [s for s in segments if s['type'] == 'TRa']
+        trd_segs  = [s for s in segments if s['type'] == 'TRd']
+        tr_segs   = tra_segs + trd_segs     # aggregate
+        sil_segs  = [s for s in segments if s['type'] == 'SIL']
 
         # [A] durations
-        cp_dur_list  = [(s['end'] - s['start']) * dt for s in cp_segs]
-        sta_dur_list = [(s['end'] - s['start']) * dt for s in sta_segs]
-        tr_dur_list  = [(s['end'] - s['start']) * dt for s in tr_segs]
-        cp_dur  = sum(cp_dur_list)
-        sta_dur = sum(sta_dur_list)
-        tr_dur  = sum(tr_dur_list)
-        sil_dur = sum((s['end'] - s['start']) * dt for s in sil_segs)
+        cp_dur_list   = [(s['end'] - s['start']) * dt for s in cp_segs]
+        stap_dur_list = [(s['end'] - s['start']) * dt for s in stap_segs]
+        stat_dur_list = [(s['end'] - s['start']) * dt for s in stat_segs]
+        sta_dur_list  = stap_dur_list + stat_dur_list
+        tra_dur_list  = [(s['end'] - s['start']) * dt for s in tra_segs]
+        trd_dur_list  = [(s['end'] - s['start']) * dt for s in trd_segs]
+        tr_dur_list   = tra_dur_list + trd_dur_list
+        cp_dur   = sum(cp_dur_list)
+        stap_dur = sum(stap_dur_list)
+        stat_dur = sum(stat_dur_list)
+        sta_dur  = stap_dur + stat_dur
+        tra_dur  = sum(tra_dur_list)
+        trd_dur  = sum(trd_dur_list)
+        tr_dur   = tra_dur + trd_dur
+        sil_dur  = sum((s['end'] - s['start']) * dt for s in sil_segs)
 
         # [D] cents
         def _cents(segs):
             return [s['cents'] for s in segs
                     if s.get('cents') is not None and np.isfinite(s.get('cents', np.nan))]
 
-        cp_cents  = _cents(cp_segs)
-        sta_cents = _cents(sta_segs)
+        cp_cents   = _cents(cp_segs)
+        stap_cents = _cents(stap_segs)   # STAp = peaks
+        stat_cents = _cents(stat_segs)   # STAt = troughs
+        sta_cents  = stap_cents + stat_cents
 
         # [C] run-level
-        def _runs(seg_type):
+        def _runs(*seg_types):
             run_durs, cur = [], 0.0
             for s in segments:
-                if s['type'] == seg_type:
+                if s['type'] in seg_types:
                     cur += (s['end'] - s['start']) * dt
                 elif cur > 0:
                     run_durs.append(cur); cur = 0.0
@@ -151,37 +165,21 @@ def analyse_one_recording(
                 run_durs.append(cur)
             return run_durs
 
-        cp_run_durs  = _runs('CP')
-        sta_run_durs = _runs('STA')
-        tr_run_durs  = _runs('TR')
-
-        # STA+TR combined consecutive runs (any ordering)
-        def _runs_combined(*types):
-            run_durs, cur = [], 0.0
-            for s in segments:
-                if s['type'] in types:
-                    cur += (s['end'] - s['start']) * dt
-                elif cur > 0:
-                    run_durs.append(cur); cur = 0.0
-            if cur > 0:
-                run_durs.append(cur)
-            return run_durs
-
-        sta_tr_run_durs = _runs_combined('STA', 'TR')
-
-        # [D] STA peak / valley
-        sta_peak_cents, sta_valley_cents = [], []
-        for seg in sta_segs:
-            if seg['start'] in local_peak_map:
-                _, kind = local_peak_map[seg['start']]
-                (sta_peak_cents if kind == 'max' else sta_valley_cents).append(seg['cents'])
+        cp_run_durs   = _runs('CP')
+        stap_run_durs = _runs('STAp')
+        stat_run_durs = _runs('STAt')
+        sta_run_durs  = _runs('STAp', 'STAt')
+        tra_run_durs  = _runs('TRa')
+        trd_run_durs  = _runs('TRd')
+        tr_run_durs   = _runs('TRa', 'TRd')
+        sta_tr_run_durs = _runs('STAp', 'STAt', 'TRa', 'TRd')
 
         rows.append({
             'recording_id':      recording_id,
             'performer':         performer,
             'svara_label':       svara_label,
             'svara_dur_sec':     svara_dur,
-            # [A] segment counts + totals
+            # [A] segment counts + totals (aggregate)
             'n_cp':              len(cp_segs),
             'cp_total_dur_sec':  float(cp_dur),
             'cp_frac':           float(cp_dur  / max(svara_dur, 1e-6)),
@@ -193,37 +191,73 @@ def analyse_one_recording(
             'tr_frac':           float(tr_dur  / max(svara_dur, 1e-6)),
             'sil_total_dur_sec': float(sil_dur),
             'sil_frac':          float(sil_dur / max(svara_dur, 1e-6)),
+            # [A] split STAp / STAt
+            'n_stap':              len(stap_segs),
+            'stap_total_dur_sec':  float(stap_dur),
+            'stap_frac':           float(stap_dur / max(svara_dur, 1e-6)),
+            'n_stat':              len(stat_segs),
+            'stat_total_dur_sec':  float(stat_dur),
+            'stat_frac':           float(stat_dur / max(svara_dur, 1e-6)),
+            # [A] split TRa / TRd
+            'n_tra':              len(tra_segs),
+            'tra_total_dur_sec':  float(tra_dur),
+            'tra_frac':           float(tra_dur / max(svara_dur, 1e-6)),
+            'n_trd':              len(trd_segs),
+            'trd_total_dur_sec':  float(trd_dur),
+            'trd_frac':           float(trd_dur / max(svara_dur, 1e-6)),
             # [D] cents summaries
-            'cp_mean_cents':          float(np.mean(cp_cents))         if cp_cents         else np.nan,
-            'sta_mean_cents':         float(np.mean(sta_cents))        if sta_cents        else np.nan,
-            'sta_std_cents':          float(np.std(sta_cents))         if sta_cents        else np.nan,
-            'sta_peaks_mean_cents':   float(np.mean(sta_peak_cents))   if sta_peak_cents   else np.nan,
-            'sta_peaks_std_cents':    float(np.std(sta_peak_cents))    if sta_peak_cents   else np.nan,
-            'sta_valleys_mean_cents': float(np.mean(sta_valley_cents)) if sta_valley_cents else np.nan,
-            'sta_valleys_std_cents':  float(np.std(sta_valley_cents))  if sta_valley_cents else np.nan,
-            # [C] run counts + summaries
+            'cp_mean_cents':          float(np.mean(cp_cents))    if cp_cents    else np.nan,
+            'sta_mean_cents':         float(np.mean(sta_cents))   if sta_cents   else np.nan,
+            'sta_std_cents':          float(np.std(sta_cents))    if sta_cents   else np.nan,
+            'stap_mean_cents':        float(np.mean(stap_cents))  if stap_cents  else np.nan,
+            'stap_std_cents':         float(np.std(stap_cents))   if stap_cents  else np.nan,
+            'stat_mean_cents':        float(np.mean(stat_cents))  if stat_cents  else np.nan,
+            'stat_std_cents':         float(np.std(stat_cents))   if stat_cents  else np.nan,
+            # kept for backward compat — same as stap/stat_mean_cents
+            'sta_peaks_mean_cents':   float(np.mean(stap_cents))  if stap_cents  else np.nan,
+            'sta_peaks_std_cents':    float(np.std(stap_cents))   if stap_cents  else np.nan,
+            'sta_valleys_mean_cents': float(np.mean(stat_cents))  if stat_cents  else np.nan,
+            'sta_valleys_std_cents':  float(np.std(stat_cents))   if stat_cents  else np.nan,
+            # [C] run counts + summaries (aggregate)
             'n_cp_runs':        len(cp_run_durs),
             'n_sta_runs':       len(sta_run_durs),
             'n_tr_runs':        len(tr_run_durs),
-            'cp_run_mean_dur':  float(np.mean(cp_run_durs))  if cp_run_durs  else np.nan,
-            'sta_run_mean_dur': float(np.mean(sta_run_durs)) if sta_run_durs else np.nan,
-            'tr_run_mean_dur':  float(np.mean(tr_run_durs))  if tr_run_durs  else np.nan,
+            'cp_run_mean_dur':  float(np.mean(cp_run_durs))   if cp_run_durs   else np.nan,
+            'sta_run_mean_dur': float(np.mean(sta_run_durs))  if sta_run_durs  else np.nan,
+            'tr_run_mean_dur':  float(np.mean(tr_run_durs))   if tr_run_durs   else np.nan,
             'cp_run_max_dur':      float(np.max(cp_run_durs))      if cp_run_durs      else np.nan,
-            'cp_run_max_frac':     float(np.max(cp_run_durs) / max(svara_dur, 1e-6))      if cp_run_durs      else np.nan,
+            'cp_run_max_frac':     float(np.max(cp_run_durs) / max(svara_dur, 1e-6))   if cp_run_durs      else np.nan,
             'sta_run_max_dur':     float(np.max(sta_run_durs))     if sta_run_durs     else np.nan,
             'sta_tr_run_max_dur':  float(np.max(sta_tr_run_durs))  if sta_tr_run_durs  else np.nan,
-            'sta_tr_run_max_frac': float(np.max(sta_tr_run_durs) / max(svara_dur, 1e-6)) if sta_tr_run_durs  else np.nan,
+            'sta_tr_run_max_frac': float(np.max(sta_tr_run_durs) / max(svara_dur, 1e-6)) if sta_tr_run_durs else np.nan,
+            # [C] split run summaries
+            'n_stap_runs':    len(stap_run_durs),
+            'n_stat_runs':    len(stat_run_durs),
+            'n_tra_runs':     len(tra_run_durs),
+            'n_trd_runs':     len(trd_run_durs),
+            'stap_run_mean_dur': float(np.mean(stap_run_durs)) if stap_run_durs else np.nan,
+            'stat_run_mean_dur': float(np.mean(stat_run_durs)) if stat_run_durs else np.nan,
+            'tra_run_mean_dur':  float(np.mean(tra_run_durs))  if tra_run_durs  else np.nan,
+            'trd_run_mean_dur':  float(np.mean(trd_run_durs))  if trd_run_durs  else np.nan,
             # lists — excluded from DataFrame, kept for plots
-            'cp_dur_list':           cp_dur_list,
-            'sta_dur_list':          sta_dur_list,
-            'tr_dur_list':           tr_dur_list,
-            'cp_cents_list':         cp_cents,
-            'sta_cents_list':        sta_cents,
-            'cp_run_dur_list':       cp_run_durs,
-            'sta_run_dur_list':      sta_run_durs,
-            'tr_run_dur_list':       tr_run_durs,
-            'sta_peak_cents_list':   sta_peak_cents,
-            'sta_valley_cents_list': sta_valley_cents,
+            'cp_dur_list':          cp_dur_list,
+            'stap_dur_list':        stap_dur_list,
+            'stat_dur_list':        stat_dur_list,
+            'sta_dur_list':         sta_dur_list,
+            'tra_dur_list':         tra_dur_list,
+            'trd_dur_list':         trd_dur_list,
+            'tr_dur_list':          tr_dur_list,
+            'cp_cents_list':        cp_cents,
+            'stap_cents_list':      stap_cents,
+            'stat_cents_list':      stat_cents,
+            'sta_cents_list':       sta_cents,
+            'cp_run_dur_list':      cp_run_durs,
+            'stap_run_dur_list':    stap_run_durs,
+            'stat_run_dur_list':    stat_run_durs,
+            'sta_run_dur_list':     sta_run_durs,
+            'tra_run_dur_list':     tra_run_durs,
+            'trd_run_dur_list':     trd_run_durs,
+            'tr_run_dur_list':      tr_run_durs,
         })
 
     return rows

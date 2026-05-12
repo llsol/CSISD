@@ -43,9 +43,11 @@ sys.path.insert(0, str(ROOT))
 import settings
 from src.pitch_extraction.swiftf0_finetune.dataset import scms_official_split
 
-SCMS_ROOT  = settings.PROJECT_ROOT / "data" / "datasets" / "scms"
-SEP_ROOT   = settings.DATA_INTERIM / "scms_separated"
-PITCH_ROOT = settings.DATA_INTERIM / "scms_pitch"
+SCMS_ROOT          = settings.PROJECT_ROOT / "data" / "datasets" / "scms"
+SEP_ROOT           = settings.DATA_INTERIM / "scms_separated"
+PITCH_ROOT_FTANET  = settings.DATA_INTERIM / "scms_pitch_ftanet"
+PITCH_ROOT_FINE    = settings.DATA_INTERIM / "scms_pitch_swiftf0finetune"
+PITCH_ROOT_SCRATCH = settings.DATA_INTERIM / "scms_pitch_swiftf0scratch"
 
 PAPER_BASELINE = {
     "FTA-C (paper)": dict(VR=96.35, VFA=8.38,  RPA=90.17, RCA=90.46, OA=90.99),
@@ -68,13 +70,11 @@ def load_annotation(csv_path: Path) -> tuple[np.ndarray, np.ndarray]:
 # ── FTANet: load cached predictions ──────────────────────────────────────────
 
 def load_ftanet(stem: str, source: str) -> tuple[np.ndarray, np.ndarray] | None:
-    path = PITCH_ROOT / f"{stem}_{source}_ftanet_raw.npy"
+    path = PITCH_ROOT_FTANET / source / f"{stem}_{source}_ftanet_raw.npy"
     if not path.exists():
         return None
-    data = np.load(path)          # (N, 2): time_sec, f0_hz
-    times = data[:, 0].astype(np.float64)
-    freqs = data[:, 1].astype(np.float64)   # 0.0 = unvoiced
-    return times, freqs
+    data = np.load(path)
+    return data[:, 0].astype(np.float64), data[:, 1].astype(np.float64)
 
 
 # ── SwiftF0: live inference ───────────────────────────────────────────────────
@@ -101,6 +101,22 @@ def load_swiftf0(model_type: str, run_name: str | None, device: torch.device):
     print(f"  [{model_type}] epoch={ckpt['epoch']}  val={ckpt.get('best_val', '?'):.4f}  {best}")
     return model
 
+def load_cached_swiftf0(model_type: str, stem: str, source: str) -> tuple[np.ndarray, np.ndarray] | None:
+    if model_type == "finetune":
+        root = PITCH_ROOT_FINE
+        name = f"{stem}_{source}_swiftf0-finetune_raw.npy"
+    elif model_type == "scratch":
+        root = PITCH_ROOT_SCRATCH
+        name = f"{stem}_{source}_swiftf0-scratch_raw.npy"
+    else:
+        raise ValueError(model_type)
+
+    path = root / source / name
+    if not path.exists():
+        return None
+
+    data = np.load(path)
+    return data[:, 0].astype(np.float64), data[:, 1].astype(np.float64)
 
 def infer_swiftf0(
     model,
@@ -198,6 +214,8 @@ def main():
     parser.add_argument("--sources",      nargs="+", default=["original", "as"],
                         choices=["original", "as", "unet"])
     parser.add_argument("--scms-root",    default=None)
+    parser.add_argument("--cached", action="store_true",
+                        help="Use cached SwiftF0 predictions instead of live inference.")
     args = parser.parse_args()
 
     scms_root = Path(args.scms_root) if args.scms_root else SCMS_ROOT
@@ -250,32 +268,99 @@ def main():
         predictions[("ftanet", source)] = (ftanet_t, ftanet_f, None)
 
         # SwiftF0-finetune
-        fine_t, fine_p, fine_c = [], [], []
-        for i, stem in enumerate(test_stems):
-            wav = swiftf0_audio_path(stem, source)
-            if not wav.exists():
-                fine_t.append(np.array([])); fine_p.append(np.array([])); fine_c.append(np.array([]))
-                continue
-            if (i + 1) % 20 == 0 or i == 0:
-                print(f"  [finetune/{source}] {i+1}/{len(test_stems)}", end="\r", flush=True)
-            t, p, c = infer_swiftf0(model_fine, wav, device, SR_FINE, HOP_FINE)
-            fine_t.append(t); fine_p.append(p); fine_c.append(c)
-        print(f"  [finetune/{source}] done            ")
-        predictions[("finetune", source)] = (fine_t, fine_p, fine_c)
+        if args.cached:
+            fine_t, fine_p = [], []
+            n_missing = 0
+
+            for stem in test_stems:
+                res = load_cached_swiftf0("finetune", stem, source)
+                if res is None:
+                    n_missing += 1
+                    fine_t.append(np.array([]))
+                    fine_p.append(np.array([]))
+                else:
+                    fine_t.append(res[0])
+                    fine_p.append(res[1])
+
+            if n_missing:
+                print(f"  [finetune/{source}] {n_missing}/{len(test_stems)} stems missing cache")
+
+            predictions[("finetune", source)] = (fine_t, fine_p, None)
+
+        else:
+            fine_t, fine_p, fine_c = [], [], []
+            for i, stem in enumerate(test_stems):
+                wav = swiftf0_audio_path(stem, source)
+                if not wav.exists():
+                    fine_t.append(np.array([])); fine_p.append(np.array([])); fine_c.append(np.array([]))
+                    continue
+                if (i + 1) % 20 == 0 or i == 0:
+                    print(f"  [finetune/{source}] {i+1}/{len(test_stems)}", end="\r", flush=True)
+                t, p, c = infer_swiftf0(model_fine, wav, device, SR_FINE, HOP_FINE)
+                fine_t.append(t); fine_p.append(p); fine_c.append(c)
+
+            print(f"  [finetune/{source}] done            ")
+            predictions[("finetune", source)] = (fine_t, fine_p, fine_c)
 
         # SwiftF0-scratch
-        sc_t, sc_p, sc_c = [], [], []
-        for i, stem in enumerate(test_stems):
-            wav = swiftf0_audio_path(stem, source)
-            if not wav.exists():
-                sc_t.append(np.array([])); sc_p.append(np.array([])); sc_c.append(np.array([]))
-                continue
-            if (i + 1) % 20 == 0 or i == 0:
-                print(f"  [scratch/{source}] {i+1}/{len(test_stems)}", end="\r", flush=True)
-            t, p, c = infer_swiftf0(model_sc, wav, device, SR_SC, HOP_SC)
-            sc_t.append(t); sc_p.append(p); sc_c.append(c)
-        print(f"  [scratch/{source}] done             ")
-        predictions[("scratch", source)] = (sc_t, sc_p, sc_c)
+        if args.cached:
+            sc_t, sc_p = [], []
+            n_missing = 0
+
+            for stem in test_stems:
+                res = load_cached_swiftf0("scratch", stem, source)
+                if res is None:
+                    n_missing += 1
+                    sc_t.append(np.array([]))
+                    sc_p.append(np.array([]))
+                else:
+                    sc_t.append(res[0])
+                    sc_p.append(res[1])
+
+            if n_missing:
+                print(f"  [scratch/{source}] {n_missing}/{len(test_stems)} stems missing cache")
+
+            predictions[("scratch", source)] = (sc_t, sc_p, None)
+
+        else:
+            sc_t, sc_p, sc_c = [], [], []
+            for i, stem in enumerate(test_stems):
+                wav = swiftf0_audio_path(stem, source)
+                if not wav.exists():
+                    sc_t.append(np.array([])); sc_p.append(np.array([])); sc_c.append(np.array([]))
+                    continue
+                if (i + 1) % 20 == 0 or i == 0:
+                    print(f"  [scratch/{source}] {i+1}/{len(test_stems)}", end="\r", flush=True)
+                t, p, c = infer_swiftf0(model_sc, wav, device, SR_SC, HOP_SC)
+                sc_t.append(t); sc_p.append(p); sc_c.append(c)
+
+            print(f"  [scratch/{source}] done             ")
+            predictions[("scratch", source)] = (sc_t, sc_p, sc_c)
+
+    # discard stems missing in any system/source so all models score on the same set
+    n_total = len(test_stems)
+    valid = np.ones(n_total, dtype=bool)
+    for est_t, _, _ in predictions.values():
+        for i, t in enumerate(est_t):
+            if len(t) == 0:
+                valid[i] = False
+
+    n_discarded = int((~valid).sum())
+    if n_discarded:
+        keep = [i for i, v in enumerate(valid) if v]
+        print(f"\n[eval] Discarding {n_discarded} stems missing in ≥1 system — "
+              f"evaluating on {len(keep)}/{n_total}")
+        test_stems = [test_stems[i] for i in keep]
+        ref_times  = [ref_times[i]  for i in keep]
+        ref_freqs  = [ref_freqs[i]  for i in keep]
+        predictions = {
+            k: (
+                [v[0][i] for i in keep],
+                [v[1][i] for i in keep],
+                ([v[2][i] for i in keep] if v[2] is not None else None),
+            )
+            for k, v in predictions.items()
+        }
 
     # print results
     sep = print_header()

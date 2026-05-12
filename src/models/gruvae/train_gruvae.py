@@ -58,14 +58,17 @@ MODEL_CFG = ModelConfig(
     svara_cond_dim = 8,  # cVAE: svara one-hot (7) + log1p(total_dur_sec) (1)
     condition_z_every_step = True,
     teacher_forcing_ratio  = 0.0,   # decoder never sees real prev token → must use z
-    lambda_type      = 0.2,
-    lambda_dur_cp    = 0.3,   # MI_svara=0.11, MI_perf=0.05 → invariant-ish
-    lambda_dur_sta   = 0.05,  # MI_perf=0.26-0.39 → performer-dependent, penalitzar poc
-    lambda_dur_sil   = 0.1,   # MI weak
-    lambda_cp_cents  = 3.0,
-    lambda_sta_cents = 7.0,
+    lambda_type       = 0.2,
+    lambda_dur_cp     = 0.3,    # MI_svara=0.11, MI_perf=0.05 → invariant-ish
+    lambda_dur_stap   = 0.05,   # MI_perf=0.26-0.39 → performer-dependent, penalitzar poc
+    lambda_dur_stat   = 0.05,
+    lambda_dur_sil    = 0.1,    # MI weak
+    lambda_cp_cents   = 3.0,
+    lambda_stap_cents = 7.0,
+    lambda_stat_cents = 7.0,
     lambda_length     = 0.1,
-    lambda_dur_tr     = 0.1,   # TR duration — return time, informative
+    lambda_dur_tra    = 0.1,    # TR duration — return time, informative
+    lambda_dur_trd    = 0.1,
     beta              = 0.5,
     free_bits         = 0.5,  # prevé posterior collapse: KL ≥ 0.5 × 32 = 16 nats
     use_huber_for_continuous = True,

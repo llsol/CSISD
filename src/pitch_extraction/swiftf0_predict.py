@@ -9,28 +9,25 @@ Usage:
     # Original corpus audio (MP3):
     python -m src.pitch_extraction.swiftf0_predict srs_v1_svd_sav
 
-    # U-Net separated voice:
-    python -m src.pitch_extraction.swiftf0_predict srs_v1_svd_sav --unet
-
     # BS-RoFormer separated voice:
     python -m src.pitch_extraction.swiftf0_predict srs_v1_svd_sav --as
 
-    # All SARASUDA_VARNAM with U-Net separated voice:
-    python -m src.pitch_extraction.swiftf0_predict --all --unet
+    # All SARASUDA_VARNAM:
+    python -m src.pitch_extraction.swiftf0_predict --all
+    python -m src.pitch_extraction.swiftf0_predict --all --as
 
-Reads audio from:
-    Original : data/corpus/{id}/audio/{id}.mp3
-    U-Net    : data/interim/source_separation/separated/{id}/{id}_unet_voice.wav
-    BS-Roform: data/interim/source_separation_as/separated/{id}/{id}_as_voice.wav
+    # All SCMS clips (original audio):
+    python -m src.pitch_extraction.swiftf0_predict --scms
 
-Writes:
-    data/interim/{id}/pitch_raw/{id}_{suffix}_swiftf0_raw.npy
-    shape: (N, 2) — col 0: time_sec, col 1: f0_Hz (0.0 = unvoiced)
+    # All SCMS clips (BS-RoFormer separated):
+    python -m src.pitch_extraction.swiftf0_predict --scms --as
 
-Suffix mapping:
-    (no flag)  → "original"
-    --unet     → "unet"
-    --as       → "as"
+    # SCMS test split only, skip already-done:
+    python -m src.pitch_extraction.swiftf0_predict --scms --split test --skip-existing
+
+CV output  : data/interim/cv_pitch_swiftf0/{suffix}/{id}/{id}_{suffix}_swiftf0_raw.npy
+SCMS output: data/interim/scms_pitch_swiftf0/{suffix}/{stem}_{suffix}_swiftf0_raw.npy
+Shape: (N, 2) — col 0: time_sec, col 1: f0_Hz (0.0 = unvoiced)
 """
 
 from __future__ import annotations
@@ -44,11 +41,15 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 import settings
+from src.pitch_extraction.swiftf0_finetune.dataset import scms_official_split
 
-CONFIDENCE_THRESHOLD = 0.9   # voicing threshold (paper default)
-FMIN = 46.875                # Hz — lower bound (matches SwiftF0 training range)
-FMAX = 2093.75               # Hz — upper bound
-MODEL_SR = 16000             # SwiftF0 native sample rate
+CONFIDENCE_THRESHOLD = 0.9
+FMIN                 = 46.875
+FMAX                 = 2093.75
+MODEL_SR             = 16000
+SCMS_AUDIO_DIR       = settings.PROJECT_ROOT / "data" / "datasets" / "scms" / "audio"
+SCMS_SEPARATED_DIR   = settings.DATA_INTERIM / "scms_separated"
+SCMS_PITCH_DIR       = settings.DATA_INTERIM / "scms_pitch_swiftf0"
 
 
 def _find_corpus_audio(recording_id: str) -> Path:
@@ -60,40 +61,34 @@ def _find_corpus_audio(recording_id: str) -> Path:
     raise FileNotFoundError(f"No audio file found in {audio_dir}")
 
 
-def predict_pitch(recording_id: str, audio_path: Path, suffix: str) -> Path:
+def _run_swiftf0(audio_path: Path) -> tuple[np.ndarray, np.ndarray]:
     import librosa
     from swift_f0 import SwiftF0
 
-    if not audio_path.exists():
-        raise FileNotFoundError(f"Audio not found: {audio_path}")
-
-    out_dir  = settings.DATA_INTERIM / recording_id / "pitch_raw"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{recording_id}_{suffix}_swiftf0_raw.npy"
-
-    print(f"[swiftf0] loading {audio_path.name} → resample to {MODEL_SR} Hz")
     audio, _ = librosa.load(str(audio_path), sr=MODEL_SR, mono=True)
+    detector = SwiftF0(fmin=FMIN, fmax=FMAX,
+                       confidence_threshold=CONFIDENCE_THRESHOLD)
+    result   = detector.detect_from_array(audio, sample_rate=MODEL_SR)
 
-    detector = SwiftF0(
-        fmin=FMIN,
-        fmax=FMAX,
-        confidence_threshold=CONFIDENCE_THRESHOLD,
-    )
-
-    print(f"[swiftf0] predicting ({len(audio)/MODEL_SR:.1f} s) ...")
-    result = detector.detect_from_array(audio, sample_rate=MODEL_SR)
-
-    # Convert to (N, 2) array matching FTA-Net convention: 0 Hz = unvoiced
     f0_hz  = np.asarray(result.pitch_hz,   dtype=np.float64)
     times  = np.asarray(result.timestamps, dtype=np.float64)
     voiced = np.asarray(result.voicing,    dtype=bool)
-
     f0_hz[~voiced] = 0.0
+    return times, f0_hz
+
+
+def predict_pitch(audio_path: Path, out_path: Path) -> Path:
+    if not audio_path.exists():
+        raise FileNotFoundError(f"Audio not found: {audio_path}")
+
+    print(f"[swiftf0] loading {audio_path.name} → resample to {MODEL_SR} Hz")
+    times, f0_hz = _run_swiftf0(audio_path)
 
     pitch = np.column_stack([times, f0_hz])
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     np.save(out_path, pitch)
 
-    n_voiced = voiced.sum()
+    n_voiced = (f0_hz > 0).sum()
     print(
         f"[swiftf0] {len(pitch):,} frames  "
         f"({times[-1]:.1f} s)  "
@@ -105,27 +100,59 @@ def predict_pitch(recording_id: str, audio_path: Path, suffix: str) -> Path:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="SwiftF0 pitch extraction on Carnatic vocal audio."
+        description="SwiftF0 (original weights) pitch extraction."
     )
     parser.add_argument(
         "recordings", nargs="*",
         help="Recording ID(s). Defaults to CURRENT_PIECE; use --all for SARASUDA_VARNAM.",
     )
-    parser.add_argument(
-        "--all", action="store_true",
-        help="Process all recordings in settings.SARASUDA_VARNAM.",
-    )
+    parser.add_argument("--all",  action="store_true",
+                        help="Process all recordings in settings.SARASUDA_VARNAM.")
+    parser.add_argument("--scms", action="store_true",
+                        help="Process all SCMS clips.")
+    parser.add_argument("--skip-existing", action="store_true",
+                        help="Skip clips whose output .npy already exists (--scms mode).")
+    parser.add_argument("--split", choices=["train", "test", "all"], default="all",
+                        help="SCMS split to process (default: all).")
     source = parser.add_mutually_exclusive_group()
-    source.add_argument(
-        "--unet", action="store_true",
-        help="Use U-Net separated voice.",
-    )
-    source.add_argument(
-        "--as", dest="as_model", action="store_true",
-        help="Use BS-RoFormer (audio-separator) separated voice.",
-    )
+    source.add_argument("--unet", action="store_true",
+                        help="Use U-Net separated voice (CV mode only).")
+    source.add_argument("--as", dest="as_model", action="store_true",
+                        help="Use BS-RoFormer separated voice.")
     args = parser.parse_args()
 
+    # ── SCMS mode ──────────────────────────────────────────────────────────────
+    if args.scms:
+        train_stems, test_stems = scms_official_split(
+            settings.PROJECT_ROOT / "data" / "datasets" / "scms"
+        )
+        if args.split == "train":
+            stems = train_stems
+        elif args.split == "test":
+            stems = test_stems
+        else:
+            stems = train_stems + test_stems
+
+        suffix     = "as" if args.as_model else "original"
+        out_subdir = SCMS_PITCH_DIR / suffix
+        out_subdir.mkdir(parents=True, exist_ok=True)
+        n_total, n_done = len(stems), 0
+        print(f"[swiftf0] SCMS mode: {n_total} clips  suffix={suffix} → {out_subdir}")
+
+        for i, stem in enumerate(stems):
+            out_path = out_subdir / f"{stem}_{suffix}_swiftf0_raw.npy"
+            if args.skip_existing and out_path.exists():
+                continue
+            audio_path = (SCMS_SEPARATED_DIR / stem / f"{stem}_as_voice.wav"
+                          if args.as_model else SCMS_AUDIO_DIR / f"{stem}.wav")
+            print(f"\n── [{i+1}/{n_total}] {stem} ──")
+            predict_pitch(audio_path, out_path)
+            n_done += 1
+
+        print(f"\n[swiftf0] SCMS done: {n_done} processed, {n_total - n_done} skipped.")
+        return
+
+    # ── corpus mode ────────────────────────────────────────────────────────────
     if args.all:
         recordings = settings.SARASUDA_VARNAM
     elif args.recordings:
@@ -150,8 +177,11 @@ def main():
             audio_path = _find_corpus_audio(recording_id)
             suffix = "original"
 
+        out_path = (settings.DATA_INTERIM / "cv_pitch_swiftf0"
+                    / suffix / recording_id
+                    / f"{recording_id}_{suffix}_swiftf0_raw.npy")
         print(f"\n── {recording_id}  [{suffix}] ──")
-        predict_pitch(recording_id, audio_path, suffix)
+        predict_pitch(audio_path, out_path)
 
 
 if __name__ == "__main__":

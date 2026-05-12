@@ -14,8 +14,7 @@ Unified 3-parameter model for STA and TR:
                    A << 0 → N-shape (derivative goes negative at centre)
                    A >  0 → W-shape of derivative (boosted tails)
 
-    STA: y(t)          (monotone or N-shape, 0 → 1)
-    TR : 1 − y(t)      (monotone or N-shape, 1 → 0)
+    STA and TR: y(t)   (0 → 1; synthesis scales to actual cents range)
 
 Endpoints are always exactly 0 and 1 regardless of A:
     sin(2π·(0−0.5)) = sin(−π) = 0   ✓
@@ -69,11 +68,6 @@ def curve_model(t: np.ndarray, k: float, s: float, A: float) -> np.ndarray:
     return (h - lo) / d if abs(d) > 1e-12 else t.copy()
 
 
-def curve_model_tr(t: np.ndarray, k: float, s: float, A: float) -> np.ndarray:
-    """TR: flipped, 1 → 0."""
-    return 1.0 - curve_model(t, k, s, A)
-
-
 # ---------------------------------------------------------------------------
 # Fitting
 # ---------------------------------------------------------------------------
@@ -84,9 +78,9 @@ def r_squared(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return 1.0 - ss_res / ss_tot if ss_tot > 1e-12 else 1.0
 
 
-def fit_curve(t: np.ndarray, p: np.ndarray, seg_type: str) -> tuple[float, float, float, float, float]:
+def fit_curve(t: np.ndarray, p: np.ndarray) -> tuple[float, float, float, float, float]:
     """Multi-start fit. Returns (k, s, A, rmse, r2)."""
-    fn = curve_model if seg_type == "STA" else curve_model_tr
+    fn = curve_model
 
     best: tuple[float, float, float, float] | None = None  # (k, s, A, rmse)
     for k0 in [1.0, 3.0, 8.0]:
@@ -130,7 +124,7 @@ def fit_corpus(df: pl.DataFrame) -> pl.DataFrame:
     for i, row in enumerate(rows):
         t = np.array(row["t_norm"],  dtype=np.float64)
         p = np.array(row["p_norm"],  dtype=np.float64)
-        k, s, A, rmse, r2 = fit_curve(t, p, row["seg_type"])
+        k, s, A, rmse, r2 = fit_curve(t, p)
         ks.append(k); ss.append(s); As.append(A)
         rmses.append(rmse); r2s.append(r2)
 

@@ -1,9 +1,13 @@
 """
 Pitch extraction with SwiftF0-scratch (trained from scratch on SCMS Carnatic).
 
-Writes:
-    data/interim/{id}/pitch_raw_swiftf0scratch/{id}_{source}_swiftf0scratch_raw.npy
-    shape: (N, 2) — col 0: time_sec, col 1: f0_Hz (0.0 = unvoiced)
+Corpus mode — writes per recording:
+    data/interim/cv_pitch_swiftf0scratch/{source}/{id}/{id}_{source}_swiftf0scratch-{thr}_raw.npy
+
+SCMS mode (--scms) — writes per fragment:
+    data/interim/scms_pitch_swiftf0scratch/{source}/{fragment}_{source}_swiftf0-scratch_raw.npy
+
+Shape of every .npy: (N, 2) — col 0: time_sec, col 1: f0_Hz (0.0 = unvoiced)
 
 Usage:
     python -m src.pitch_extraction.swiftf0_scratch.predict srs_v1_svd_sav
@@ -11,6 +15,8 @@ Usage:
     python -m src.pitch_extraction.swiftf0_scratch.predict srs_v1_svd_sav --as
     python -m src.pitch_extraction.swiftf0_scratch.predict --all
     python -m src.pitch_extraction.swiftf0_scratch.predict srs_v1_svd_sav --run run_002
+    python -m src.pitch_extraction.swiftf0_scratch.predict --scms
+    python -m src.pitch_extraction.swiftf0_scratch.predict --scms --skip-existing
 """
 
 from __future__ import annotations
@@ -26,8 +32,12 @@ ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT))
 import settings
 from src.pitch_extraction.swiftf0_scratch.model import SwiftF0Scratch, HOP, SR
+from src.pitch_extraction.swiftf0_finetune.dataset import scms_official_split
 
 CKPT_DIR             = settings.DATA_INTERIM / "models" / "swiftf0_scratch"
+SCMS_AUDIO_DIR       = settings.PROJECT_ROOT / "data" / "datasets" / "scms" / "audio"
+SCMS_SEPARATED_DIR   = settings.DATA_INTERIM / "scms_separated"
+SCMS_PITCH_DIR       = settings.DATA_INTERIM / "scms_pitch_swiftf0scratch"
 CONFIDENCE_THRESHOLD = 0.9
 CHUNK_SEC            = 30.0
 
@@ -63,12 +73,14 @@ def predict_pitch(
     device:        torch.device,
     model:         SwiftF0Scratch,
     thr:           float = CONFIDENCE_THRESHOLD,
+    out_path:      Path | None = None,
 ) -> Path:
     import librosa
 
-    out_dir = settings.DATA_INTERIM / recording_id / "pitch_raw_swiftf0scratch"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{recording_id}_{source_suffix}_swiftf0scratch_raw.npy"
+    if out_path is None:
+        out_dir = settings.DATA_INTERIM / "cv_pitch_swiftf0scratch" / source_suffix / recording_id
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"{recording_id}_{source_suffix}_swiftf0scratch_raw.npy"
 
     print(f"[swiftf0scratch] loading {audio_path.name} → resample to {SR} Hz")
     audio, _ = librosa.load(str(audio_path), sr=SR, mono=True)
@@ -124,23 +136,22 @@ def main():
                         help="Recording ID(s). Defaults to CURRENT_PIECE.")
     parser.add_argument("--all", action="store_true",
                         help="Process all recordings in settings.SARASUDA_VARNAM.")
+    parser.add_argument("--scms", action="store_true",
+                        help="Process all SCMS test clips in data/datasets/scms/audio/.")
+    parser.add_argument("--skip-existing", action="store_true",
+                        help="Skip clips whose output .npy already exists (useful for --scms).")
     parser.add_argument("--run", default=None,
                         help="Training run directory name (e.g. run_002).")
     parser.add_argument("--thr", type=float, default=CONFIDENCE_THRESHOLD,
                         help=f"Voicing confidence threshold (default: {CONFIDENCE_THRESHOLD})")
+    parser.add_argument("--split", choices=["train", "test", "all"], default="all",
+                        help="SCMS split to process.")
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--unet", action="store_true",
                         help="Use U-Net separated voice.")
     source.add_argument("--as", dest="as_model", action="store_true",
                         help="Use BS-RoFormer separated voice.")
     args = parser.parse_args()
-
-    if args.all:
-        recordings = settings.SARASUDA_VARNAM
-    elif args.recordings:
-        recordings = args.recordings
-    else:
-        recordings = [settings.CURRENT_PIECE]
 
     thr        = args.thr
     run_dir    = (CKPT_DIR / args.run) if args.run else None
@@ -153,6 +164,49 @@ def main():
     model.load_state_dict(ckpt["model"])
     print(f"[swiftf0scratch] Loaded epoch={ckpt['epoch']}  "
           f"val_loss={ckpt.get('best_val', '?'):.4f}")
+
+    # ── SCMS mode ──────────────────────────────────────────────────────────────
+    if args.scms:
+        train_stems, test_stems = scms_official_split(
+            settings.PROJECT_ROOT / "data" / "datasets" / "scms"
+        )
+        
+        if args.split == "train":
+            stems = train_stems
+        elif args.split == "test":
+            stems = test_stems
+        else:
+            stems = train_stems + test_stems
+        
+        suffix     = "as" if args.as_model else "original"
+        out_subdir = SCMS_PITCH_DIR / suffix
+        out_subdir.mkdir(parents=True, exist_ok=True)
+        n_total = len(stems)
+        n_done  = 0
+        print(f"[swiftf0scratch] SCMS mode: {n_total} clips  suffix={suffix} → {out_subdir}")
+        for i, stem in enumerate(stems):
+            out_path = out_subdir / f"{stem}_{suffix}_swiftf0-scratch_raw.npy"
+            if args.skip_existing and out_path.exists():
+                continue
+            if args.as_model:
+                audio_path = SCMS_SEPARATED_DIR / stem / f"{stem}_as_voice.wav"
+            else:
+                audio_path = SCMS_AUDIO_DIR / f"{stem}.wav"
+            print(f"\n── [{i+1}/{n_total}] {stem}  thr={thr} ──")
+            predict_pitch("_scms", audio_path, suffix,
+                          checkpoint, device, model, thr=thr, out_path=out_path)
+            n_done += 1
+        print(f"\n[swiftf0scratch] SCMS done: {n_done} processed, "
+              f"{n_total - n_done} skipped.")
+        return
+
+    # ── corpus mode ────────────────────────────────────────────────────────────
+    if args.all:
+        recordings = settings.SARASUDA_VARNAM
+    elif args.recordings:
+        recordings = args.recordings
+    else:
+        recordings = [settings.CURRENT_PIECE]
 
     for recording_id in recordings:
         if args.unet:

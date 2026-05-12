@@ -13,10 +13,12 @@ from src.io.annotation_io import load_annotations
 # Fixed encoding for segment types
 # -------------------------------------------------------------------
 TYPE_TO_ONEHOT = {
-    "CP":  [1.0, 0.0, 0.0, 0.0],
-    "SIL": [0.0, 1.0, 0.0, 0.0],
-    "STA": [0.0, 0.0, 1.0, 0.0],
-    "TR":  [0.0, 0.0, 0.0, 1.0],
+    "CP":   [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    "SIL":  [0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+    "STAp": [0.0, 0.0, 1.0, 0.0, 0.0, 0.0],  # STA ending at local maximum
+    "STAt": [0.0, 0.0, 0.0, 1.0, 0.0, 0.0],  # STA ending at local minimum
+    "TRa":  [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],  # TR ascending (cents_end > cents_start)
+    "TRd":  [0.0, 0.0, 0.0, 0.0, 0.0, 1.0],  # TR descending (cents_end < cents_start)
 }
 
 
@@ -329,17 +331,18 @@ def build_segments_for_one_svara(
     Build structural segments for one svara.
 
     Segment types:
-      CP  — voiced flat region; cents = median.
-      STA — voiced non-flat ending AT a peak (peak is last sample);
-             cents = peak value.
-      TR  — voiced non-flat ending at CP or SIL (no peak crossed);
-             cents = 0 (transition, no absolute pitch).
-      SIL — unvoiced; cents = 0.
+      CP   — voiced flat region; cents = median.
+      STAp — voiced non-flat ending AT a local maximum; cents = peak value.
+      STAt — voiced non-flat ending AT a local minimum; cents = trough value.
+      TRa  — voiced non-flat ending at CP/SIL with ascending direction; cents = 0.
+      TRd  — voiced non-flat ending at CP/SIL with descending direction; cents = 0.
+      SIL  — unvoiced; cents = 0.
 
-    The peak is the ENDPOINT of STA, not the start.  After an STA the
-    descent back to the next CP naturally becomes the next TR segment.
+    The peak is the ENDPOINT of STAp/STAt.  After a STA the
+    descent/ascent back to the next CP naturally becomes the next TR segment.
     """
     labels = df_svara["sample_label"].to_numpy()
+    cents  = df_svara["f0_savgol_p3_w13_cents"].to_numpy()
     N = len(labels)
     segments: list[dict] = []
     i = 0
@@ -364,7 +367,7 @@ def build_segments_for_one_svara(
         # Voiced non-flat: advance until CP / SIL / peak (inclusive).
         start = i
         i += 1
-        ended_at_peak = False
+        peak_pos = -1
 
         while i < N:
             if labels[i] == "SIL":
@@ -372,12 +375,23 @@ def build_segments_for_one_svara(
             if labels[i] == "CP":
                 break
             if i in local_peak_map:
+                peak_pos = i
                 i += 1          # include the peak sample in this segment
-                ended_at_peak = True
                 break
             i += 1
 
-        seg_type = "STA" if ended_at_peak else "TR"
+        if peak_pos >= 0:
+            _, peak_kind = local_peak_map[peak_pos]
+            seg_type = "STAp" if peak_kind == "max" else "STAt"
+        else:
+            # TR: determine direction from start/end cents values
+            seg_cents = cents[start:i]
+            finite = seg_cents[np.isfinite(seg_cents)]
+            if len(finite) >= 2 and finite[-1] != finite[0]:
+                seg_type = "TRa" if finite[-1] > finite[0] else "TRd"
+            else:
+                seg_type = "TRa"  # fallback
+
         segments.append({"type": seg_type, "start": start, "end": i})
 
     return segments
@@ -409,8 +423,8 @@ def assign_segment_cents(
             vals = vals[np.isfinite(vals)]
             seg["cents"] = float(np.median(vals)) if len(vals) else 0.0
 
-        elif typ == "STA":
-            # Peak should be the last sample (e-1); find it in local_peak_map.
+        elif typ in ("STAp", "STAt"):
+            # Peak is the last sample (e-1); find it in local_peak_map.
             peak_in_seg = {k: v for k, v in local_peak_map.items() if s <= k < e}
             if peak_in_seg:
                 seg["cents"] = float(peak_in_seg[max(peak_in_seg)][0])
@@ -420,7 +434,7 @@ def assign_segment_cents(
                 vals = vals[np.isfinite(vals)]
                 seg["cents"] = float(vals[-1]) if len(vals) else 0.0
 
-        else:  # TR or SIL
+        else:  # TRa, TRd, or SIL
             seg["cents"] = 0.0
 
     return segments
@@ -440,7 +454,7 @@ def encode_segments(
         [total_duration, s_1, s_2, ..., s_K, padding]
 
     Segment format:
-        [onehot_CP, onehot_SIL, onehot_STA, onehot_TR, duration_rel, cents]
+        [onehot_CP, onehot_SIL, onehot_STAp, onehot_STAt, onehot_TRa, onehot_TRd, duration_rel, cents]
     """
 
     times = df_svara["time_rel_sec"].to_numpy()
@@ -466,7 +480,7 @@ def encode_segments(
             [dur_rel, float(seg["cents"])]
         )
 
-    dim_per_seg = 6   # 4 onehot + dur_rel + cents
+    dim_per_seg = 8   # 6 onehot + dur_rel + cents
     n_pad = max_segments - len(used_segments)
     vec.extend([0.0] * (n_pad * dim_per_seg))
 

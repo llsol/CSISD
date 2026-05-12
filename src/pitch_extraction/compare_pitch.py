@@ -18,7 +18,7 @@ Usage:
     python -m src.pitch_extraction.compare_pitch --all --source as
 
 Reads:
-    data/interim/{id}/{dir}/{id}_{source}_{extractor}_raw.npy
+    data/interim/cv_pitch_{extractor}/{source}/{id}/{id}_{source}_{extractor}_raw.npy
 
 Plots:
     1. Pitch curves — color-coded by agreement / disagreement
@@ -63,10 +63,12 @@ EXTRACTOR_STYLES = {
     "swiftf0scratch":("SwiftF0-scratch", "darkorange"),
 }
 
-# Subdirectory under data/interim/{id}/ where each extractor's raw files live.
-EXTRACTOR_PITCH_DIRS: dict[str, str] = {
-    "swiftf0ft":      "pitch_raw_swiftf0ft",
-    "swiftf0scratch": "pitch_raw_swiftf0scratch",
+# Top-level cv_pitch_* directory name for each extractor key.
+EXTRACTOR_CV_DIR: dict[str, str] = {
+    "ftanet":        "cv_pitch_ftanet",
+    "swiftf0":       "cv_pitch_swiftf0",
+    "swiftf0ft":     "cv_pitch_swiftf0finetune",
+    "swiftf0scratch":"cv_pitch_swiftf0scratch",
 }
 
 SOURCE_LABELS = {
@@ -167,10 +169,10 @@ def compare(
     if source_b is None:
         source_b = source_a
 
-    dir_a  = EXTRACTOR_PITCH_DIRS.get(extractor_a, "pitch_raw")
-    dir_b  = EXTRACTOR_PITCH_DIRS.get(extractor_b, "pitch_raw")
-    path_a = settings.DATA_INTERIM / recording_id / dir_a / f"{recording_id}_{source_a}_{extractor_a}_raw.npy"
-    path_b = settings.DATA_INTERIM / recording_id / dir_b / f"{recording_id}_{source_b}_{extractor_b}_raw.npy"
+    cv_dir_a = EXTRACTOR_CV_DIR.get(extractor_a, f"cv_pitch_{extractor_a}")
+    cv_dir_b = EXTRACTOR_CV_DIR.get(extractor_b, f"cv_pitch_{extractor_b}")
+    path_a = settings.DATA_INTERIM / cv_dir_a / source_a / recording_id / f"{recording_id}_{source_a}_{extractor_a}_raw.npy"
+    path_b = settings.DATA_INTERIM / cv_dir_b / source_b / recording_id / f"{recording_id}_{source_b}_{extractor_b}_raw.npy"
 
     label_a, color_a = EXTRACTOR_STYLES.get(extractor_a, (extractor_a, "steelblue"))
     label_b, color_b = EXTRACTOR_STYLES.get(extractor_b, (extractor_b, "tomato"))

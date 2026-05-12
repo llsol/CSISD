@@ -38,7 +38,6 @@ from collections import Counter
 from pathlib import Path
 
 import matplotlib
-matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import numpy as np
@@ -63,27 +62,35 @@ COLOR_GEN = "#EE6677"
 
 # ── segment type ordering ─────────────────────────────────────────────────────
 
-TYPE_ORD = ["CP", "SIL", "STA", "TR"]
+TYPE_ORD = ["CP", "SIL", "STAp", "STAt", "TRa", "TRd"]
 TYPE_IDX = {t: i for i, t in enumerate(TYPE_ORD)}
 
 VALID_NEXT: dict[str, set[str]] = {
-    "CP":  {"SIL", "STA", "TR"},   # no CP→CP: force break after stable region
-    "SIL": {"CP", "STA", "TR"},
-    "STA": {"SIL", "STA", "TR"},   # no STA→CP: always via TR by definition
-    "TR":  {"CP"},
+    "CP":   {"SIL", "STAp", "STAt", "TRa", "TRd"},
+    "SIL":  {"CP", "STAp", "STAt", "TRa", "TRd"},
+    "STAp": {"TRd", "SIL"},
+    "STAt": {"TRa", "SIL"},
+    "TRa":  {"CP", "STAp"},
+    "TRd":  {"CP", "STAt"},
 }
 
 # ── feature definitions ───────────────────────────────────────────────────────
 
 FEATURES = [
-    ("cp_frac",        "CP fraction"),
-    ("sta_frac",       "STA fraction"),
-    ("sil_frac",       "SIL fraction"),
-    ("tr_frac",        "TR fraction"),
-    ("n_cp",           "n CP segments"),
-    ("n_sta",          "n STA segments"),
-    ("cp_mean_cents",  "CP mean (cents)"),
-    ("sta_mean_cents", "STA mean (cents)"),
+    ("cp_frac",         "CP fraction"),
+    ("sta_frac",        "STA fraction"),
+    ("stap_frac",       "STAp fraction"),
+    ("stat_frac",       "STAt fraction"),
+    ("sil_frac",        "SIL fraction"),
+    ("tr_frac",         "TR fraction"),
+    ("tra_frac",        "TRa fraction"),
+    ("trd_frac",        "TRd fraction"),
+    ("n_cp",            "n CP segments"),
+    ("n_sta",           "n STA segments"),
+    ("cp_mean_cents",   "CP mean (cents)"),
+    ("sta_mean_cents",  "STA mean (cents)"),
+    ("stap_mean_cents", "STAp mean (cents)"),
+    ("stat_mean_cents", "STAt mean (cents)"),
 ]
 
 
@@ -95,28 +102,40 @@ def _feats_from_sample(sv_data: dict) -> dict:
     segs      = sv_data["segments"]
     total_rel = sum(s["dur_rel"] for s in segs) or 1.0
 
-    cp_segs  = [s for s in segs if s["type"] == "CP"]
-    sta_segs = [s for s in segs if s["type"] == "STA"]
-    sil_segs = [s for s in segs if s["type"] == "SIL"]
-    tr_segs  = [s for s in segs if s["type"] == "TR"]
+    cp_segs   = [s for s in segs if s["type"] == "CP"]
+    stap_segs = [s for s in segs if s["type"] == "STAp"]
+    stat_segs = [s for s in segs if s["type"] == "STAt"]
+    sta_segs  = stap_segs + stat_segs
+    sil_segs  = [s for s in segs if s["type"] == "SIL"]
+    tra_segs  = [s for s in segs if s["type"] == "TRa"]
+    trd_segs  = [s for s in segs if s["type"] == "TRd"]
+    tr_segs   = tra_segs + trd_segs
 
     def _frac(sub):
         return sum(s["dur_rel"] for s in sub) / total_rel
 
-    cp_cents  = [s["cents"] for s in cp_segs  if s["cents"] != 0.0]
-    sta_cents = [s["cents"] for s in sta_segs if s["cents"] != 0.0]
+    cp_cents   = [s["cents"] for s in cp_segs   if s["cents"] != 0.0]
+    stap_cents = [s["cents"] for s in stap_segs if s["cents"] != 0.0]
+    stat_cents = [s["cents"] for s in stat_segs if s["cents"] != 0.0]
+    sta_cents  = stap_cents + stat_cents
 
     return {
-        "svara_label":    sv_data["svara"],
-        "cp_frac":        _frac(cp_segs),
-        "sta_frac":       _frac(sta_segs),
-        "sil_frac":       _frac(sil_segs),
-        "tr_frac":        _frac(tr_segs),
-        "n_cp":           float(len(cp_segs)),
-        "n_sta":          float(len(sta_segs)),
-        "cp_mean_cents":  float(np.mean(cp_cents))  if cp_cents  else np.nan,
-        "sta_mean_cents": float(np.mean(sta_cents)) if sta_cents else np.nan,
-        "_type_seq":      [s["type"] for s in segs],
+        "svara_label":     sv_data["svara"],
+        "cp_frac":         _frac(cp_segs),
+        "sta_frac":        _frac(sta_segs),
+        "stap_frac":       _frac(stap_segs),
+        "stat_frac":       _frac(stat_segs),
+        "sil_frac":        _frac(sil_segs),
+        "tr_frac":         _frac(tr_segs),
+        "tra_frac":        _frac(tra_segs),
+        "trd_frac":        _frac(trd_segs),
+        "n_cp":            float(len(cp_segs)),
+        "n_sta":           float(len(sta_segs)),
+        "cp_mean_cents":   float(np.mean(cp_cents))   if cp_cents   else np.nan,
+        "sta_mean_cents":  float(np.mean(sta_cents))  if sta_cents  else np.nan,
+        "stap_mean_cents": float(np.mean(stap_cents)) if stap_cents else np.nan,
+        "stat_mean_cents": float(np.mean(stat_cents)) if stat_cents else np.nan,
+        "_type_seq":       [s["type"] for s in segs],
     }
 
 
@@ -410,6 +429,7 @@ def plot_transition_analysis(
     out_dir:  Path,
     run_name: str,
     n_gen:    int,
+    show:     bool = False,
 ) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     all_gt  = _pool(gt_seqs,  svaras)
@@ -459,7 +479,7 @@ def plot_transition_analysis(
     plt.tight_layout()
     p1 = out_dir / "transition_pooled.png"
     fig.savefig(p1, dpi=150, bbox_inches="tight")
-    plt.close(fig)
+    plt.show() if show else plt.close(fig)
     print(f"[compare_gen] → {p1}")
 
     # ── per-svara heatmaps ────────────────────────────────────────────────────
@@ -491,7 +511,7 @@ def plot_transition_analysis(
     plt.tight_layout()
     p2 = out_dir / "transition_per_svara.png"
     fig.savefig(p2, dpi=150, bbox_inches="tight")
-    plt.close(fig)
+    plt.show() if show else plt.close(fig)
     print(f"[compare_gen] → {p2}")
 
     # ── text summary ──────────────────────────────────────────────────────────
@@ -619,7 +639,7 @@ def _legend_handles():
             mpatches.Patch(color=COLOR_GEN, alpha=0.7, label="Generated")]
 
 
-def plot_overview(gt_rows, gen_rows, svaras, out_path, run_name, n_gen, summary=None):
+def plot_overview(gt_rows, gen_rows, svaras, out_path, run_name, n_gen, summary=None, show=False):
     fig, axes = plt.subplots(4, 2, figsize=(12, 12.8), squeeze=False)
     fig.suptitle(f"GRU+VAE [{run_name}] — generated (n={n_gen}/svara) vs ground truth",
                  fontsize=12, fontweight="bold")
@@ -635,11 +655,11 @@ def plot_overview(gt_rows, gen_rows, svaras, out_path, run_name, n_gen, summary=
     plt.tight_layout(rect=[0, 0.03, 1, 1])
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
+    plt.show() if show else plt.close(fig)
     print(f"[compare_gen] → {out_path}")
 
 
-def plot_individual_features(gt_rows, gen_rows, svaras, out_dir, run_name, n_gen, summary=None):
+def plot_individual_features(gt_rows, gen_rows, svaras, out_dir, run_name, n_gen, summary=None, show=False):
     out_dir.mkdir(parents=True, exist_ok=True)
     for key, label in FEATURES:
         fig, ax = plt.subplots(figsize=(max(6, len(svaras) * 1.5), 4))
@@ -653,7 +673,7 @@ def plot_individual_features(gt_rows, gen_rows, svaras, out_dir, run_name, n_gen
         plt.tight_layout()
         p = out_dir / f"violin_{key.replace('_', '-')}.png"
         fig.savefig(p, dpi=150, bbox_inches="tight")
-        plt.close(fig)
+        plt.show() if show else plt.close(fig)
         print(f"[compare_gen] → {p}")
 
 
@@ -674,7 +694,12 @@ def main() -> None:
     parser.add_argument("--length-noise", type=float, default=1.0,
                         help="Gaussian noise std added to predicted length before rounding "
                              "(allows 1–2 segment svaras; default: 1.0, set 0 to disable)")
+    parser.add_argument("--show", action="store_true",
+                        help="Open each figure in an interactive matplotlib window after saving")
     args = parser.parse_args()
+
+    if not args.show:
+        matplotlib.use("Agg")
 
     device   = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model    = load_model(args.run, device)
@@ -719,15 +744,18 @@ def main() -> None:
     propose_adjustments(summary, model.cfg, svaras, out_dir)
 
     # ── transition / succession analysis ─────────────────────────────────────
-    plot_transition_analysis(gt_seqs, gen_seqs, svaras, out_dir, run_name, args.n)
+    plot_transition_analysis(gt_seqs, gen_seqs, svaras, out_dir, run_name, args.n,
+                             show=args.show)
 
     # ── violin plots ──────────────────────────────────────────────────────────
     plot_overview(gt_rows, gen_rows, svaras,
                   out_path=out_dir / "overview.png",
-                  run_name=run_name, n_gen=args.n, summary=summary)
+                  run_name=run_name, n_gen=args.n, summary=summary,
+                  show=args.show)
     plot_individual_features(gt_rows, gen_rows, svaras,
                              out_dir=out_dir / "violins",
-                             run_name=run_name, n_gen=args.n, summary=summary)
+                             run_name=run_name, n_gen=args.n, summary=summary,
+                             show=args.show)
 
 
 if __name__ == "__main__":

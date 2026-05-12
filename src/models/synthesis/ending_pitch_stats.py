@@ -115,7 +115,7 @@ def _extract_one_recording(
 
         # ── 2. TR→SIL deltas ────────────────────────────────────────────
         for i, seg in enumerate(segments[:-1]):
-            if seg["type"] != "TR":
+            if seg["type"] not in ("TRa", "TRd"):
                 continue
             if segments[i + 1]["type"] != "SIL":
                 continue

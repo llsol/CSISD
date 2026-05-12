@@ -22,7 +22,7 @@ import matplotlib.pyplot as plt
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 import settings as S
-from src.models.curve_vae.fit_sta_tr_curves import curve_model, curve_model_tr
+from src.models.curve_vae.fit_sta_tr_curves import curve_model
 from src.models.curve_vae.sta_tr_model import CurveModel
 from src.models.curve_vae.plot_generated_sta_tr import plot_comparison
 
@@ -53,7 +53,7 @@ def plot_sample_fits(df: pl.DataFrame, out: Path, n_sta: int = 12, n_tr: int = 8
     axes_flat = axes.ravel()
 
     ax_idx = 0
-    for seg_df, fn, clr in [(sta, curve_model, "r"), (tr, curve_model_tr, "b")]:
+    for seg_df, fn, clr in [(sta, curve_model, "r"), (tr, curve_model, "b")]:
         for row in seg_df.iter_rows(named=True):
             ax  = axes_flat[ax_idx]; ax_idx += 1
             t   = np.array(row["t_norm"])

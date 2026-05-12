@@ -38,9 +38,11 @@ from src.models.gruvae.dataset_gruvae import SVARA_LABELS, SVARA_TO_IDX
 from src.models.gruvae.model_gruvae import ModelConfig, SvaraGRUVAE
 
 CKPT_DIR   = settings.DATA_INTERIM / "models" / "gruvae_v4"
-TYPE_NAMES = ["CP", "SIL", "STA", "TR"]
-COLOR      = {"CP": "#4caf50", "SIL": "#9e9e9e", "STA": "#ff9800", "TR": "#2196f3"}
-ALPHA      = {"CP": 0.40,      "SIL": 0.30,      "STA": 0.35,      "TR": 0.30}
+TYPE_NAMES = ["CP", "SIL", "STAp", "STAt", "TRa", "TRd"]
+COLOR      = {"CP": "#4caf50", "SIL": "#9e9e9e", "STAp": "#ff9800", "STAt": "#e65100",
+              "TRa": "#2196f3", "TRd": "#0277bd"}
+ALPHA      = {"CP": 0.40,      "SIL": 0.30,      "STAp": 0.35,      "STAt": 0.35,
+              "TRa": 0.30,     "TRd": 0.30}
 BOX_H      = 50   # half-height of each box in cents
 
 
@@ -86,7 +88,7 @@ def generate(
     with torch.no_grad():
         out      = model.generate(batch_size=n, svara_idx=idx_t, device=device,
                                   total_dur=dur_t, use_hard_mask=use_hard_mask)
-    gen       = out["generated"]         # (n, max_len, 6): [CP, SIL, STA, TR, dur_rel, cents_norm]
+    gen       = out["generated"]         # (n, max_len, 8): [CP, SIL, STAp, STAt, TRa, TRd, dur_rel, cents_norm]
     pred_lens = out["pred_length"].float().cpu()  # (n,)
 
     results = []
@@ -99,10 +101,10 @@ def generate(
         segs   = gen[i, :n_segs].cpu().numpy()
 
         segments = []
-        type_dim = model.cfg.type_dim   # 4: [CP, SIL, STA, TR]
+        type_dim = model.cfg.type_dim   # 6: [CP, SIL, STAp, STAt, TRa, TRd]
         for s in segs:
             typ = TYPE_NAMES[int(np.argmax(s[:type_dim]))]
-            cents = 0.0 if typ in ("SIL", "TR") else float(s[type_dim + 1]) * 1200.0
+            cents = 0.0 if typ in ("SIL", "TRa", "TRd") else float(s[type_dim + 1]) * 1200.0
             segments.append({
                 "type":    typ,
                 "dur_rel": float(s[type_dim]),
@@ -137,17 +139,17 @@ def plot_svara(ax: plt.Axes, data: dict, title: str = "") -> None:
         ax.add_patch(rect)
         rect.set_clip_path(ax.patch)
 
-        if typ in ("CP", "STA"):
+        if typ in ("CP", "STAp", "STAt"):
             ax.hlines(cents, x, x + w, colors=COLOR[typ], lw=1.8, zorder=3)
             label = f"{typ}  {cents:+.0f}¢"
         elif typ == "SIL":
             ax.hlines(0, x, x + w, colors=COLOR[typ], lw=1.8, ls="--", zorder=3)
             label = "SIL"
-        else:  # TR
+        else:  # TRa or TRd
             ax.hlines(0, x, x + w, colors=COLOR[typ], lw=1.8, ls=":", zorder=3)
-            label = "TR"
+            label = typ
 
-        text_y = cents if typ in ("CP", "STA") else 0
+        text_y = cents if typ in ("CP", "STAp", "STAt") else 0
         ax.text(
             x + w / 2, text_y + BOX_H * 0.52,
             label,

@@ -1,14 +1,14 @@
 """
 GRU + VAE model for structural svara representation.
 
-Input per segment (MODEL_INPUT_DIM = 6):
-    [onehot_CP, onehot_SIL, onehot_STA, onehot_TR, dur_rel, cents_norm]
+Input per segment (MODEL_INPUT_DIM = 8):
+    [onehot_CP, onehot_SIL, onehot_STAp, onehot_STAt, onehot_TRa, onehot_TRd, dur_rel, cents_norm]
 
-Note: dataset_gruvae produces sequences with INPUT_DIM = 7, which includes
-total_dur_sec at index 5. Use DATASET_FEATURE_COLS to slice the right features
+Note: dataset_gruvae produces sequences with INPUT_DIM = 9, which includes
+total_dur_sec at index 7. Use DATASET_FEATURE_COLS to slice the right features
 before feeding to the model:
 
-    x_model = x_dataset[:, :, DATASET_FEATURE_COLS]   # (batch, seq_len, 6)
+    x_model = x_dataset[:, :, DATASET_FEATURE_COLS]   # (batch, seq_len, 8)
 
 Shape conventions:
     x:        (batch, seq_len, MODEL_INPUT_DIM)
@@ -31,20 +31,26 @@ import torch.nn.functional as F
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 
-# Indices to select from dataset_gruvae's 7-feature sequences
-# dataset cols: [oh_CP, oh_SIL, oh_STA, oh_TR, dur_rel, total_dur_sec, cents_norm]
-# model cols:   [oh_CP, oh_SIL, oh_STA, oh_TR, dur_rel,                cents_norm]
-DATASET_FEATURE_COLS = [0, 1, 2, 3, 4, 6]
-MODEL_INPUT_DIM = 6   # == len(DATASET_FEATURE_COLS)
+# Indices to select from dataset_gruvae's 9-feature sequences
+# dataset cols: [oh_CP, oh_SIL, oh_STAp, oh_STAt, oh_TRa, oh_TRd, dur_rel, total_dur_sec, cents_norm]
+# model cols:   [oh_CP, oh_SIL, oh_STAp, oh_STAt, oh_TRa, oh_TRd, dur_rel,                cents_norm]
+DATASET_FEATURE_COLS = [0, 1, 2, 3, 4, 5, 6, 8]
+MODEL_INPUT_DIM = 8   # == len(DATASET_FEATURE_COLS)
 
-# Type indices: CP=0, SIL=1, STA=2, TR=3
-# Musical grammar: which types can follow each type.
-# TR→{CP} only; TR at end-of-sequence is fine (no successor needed).
+# Type indices: CP=0, SIL=1, STAp=2, STAt=3, TRa=4, TRd=5
+# Musical grammar (conservative, physics-based):
+#   STAp (peak) → TRd or SIL    (peak followed by descending transition or silence)
+#   STAt (trough) → TRa or SIL  (trough followed by ascending transition or silence)
+#   TRa (ascending) → CP or STAp  (ascending ends at stable pitch or new peak)
+#   TRd (descending) → CP or STAt  (descending ends at stable pitch or new trough)
+# TRa/TRd at end-of-sequence is fine (no successor needed).
 VALID_NEXT: dict[int, set[int]] = {
-    0: {1, 2, 3},     # CP  → SIL, STA, TR  (no CP→CP: force break after stable region)
-    1: {0, 2, 3},     # SIL → CP, STA, TR
-    2: {1, 2, 3},     # STA → SIL, STA, TR  (STA→CP forbidden: always via TR by definition)
-    3: {0},           # TR  → CP only
+    0: {1, 2, 3, 4, 5},   # CP   → SIL, STAp, STAt, TRa, TRd
+    1: {0, 2, 3, 4, 5},   # SIL  → CP, STAp, STAt, TRa, TRd
+    2: {5, 1},             # STAp → TRd, SIL  (peak → descending or silence)
+    3: {4, 1},             # STAt → TRa, SIL  (trough → ascending or silence)
+    4: {0, 2},             # TRa  → CP, STAp  (ascending ends at stable or peak)
+    5: {0, 3},             # TRd  → CP, STAt  (descending ends at stable or trough)
 }
 
 # Number of svara labels — always 7, constant across config variants
@@ -58,7 +64,7 @@ _N_SVARA = 7
 @dataclass
 class ModelConfig:
     input_dim:              int   = MODEL_INPUT_DIM
-    type_dim:               int   = 4
+    type_dim:               int   = 6
     hidden_dim:             int   = 128
     latent_dim:             int   = 16
     num_layers:             int   = 1
@@ -73,13 +79,16 @@ class ModelConfig:
     svara_cond_dim:         int   = 7
 
     lambda_type:            float = 1.0
-    lambda_dur_cp:          float = 0.3   # CP dur — moderately invariant (MI_perf≈0.05)
-    lambda_dur_sta:         float = 0.05  # STA dur — performer-dependent (MI_perf≈0.26-0.39)
-    lambda_dur_sil:         float = 0.1   # SIL dur — weak signal
-    lambda_cp_cents:        float = 2.0   # CP pitch — discriminative but performer-dependent
-    lambda_sta_cents:       float = 5.0   # STA pitch — peak value, most musicologically relevant
-    lambda_length:          float = 0.1   # weight for n_segments prediction loss
-    lambda_dur_tr:          float = 0.135   # TR duration — return time, informative
+    lambda_dur_cp:          float = 0.3    # CP dur — moderately invariant
+    lambda_dur_stap:        float = 0.05   # STAp dur — performer-dependent
+    lambda_dur_stat:        float = 0.05   # STAt dur — performer-dependent
+    lambda_dur_sil:         float = 0.1    # SIL dur — weak signal
+    lambda_cp_cents:        float = 2.0    # CP pitch — discriminative
+    lambda_stap_cents:      float = 5.0    # STAp pitch — peak value, most relevant
+    lambda_stat_cents:      float = 5.0    # STAt pitch — trough value
+    lambda_length:          float = 0.1    # weight for n_segments prediction loss
+    lambda_dur_tra:         float = 0.135  # TRa duration — return time
+    lambda_dur_trd:         float = 0.135  # TRd duration — return time
 
     use_attention:          bool  = True   # pool all GRU states via learned attention
 
@@ -220,9 +229,8 @@ class SvaraDecoder(nn.Module):
     ) -> torch.Tensor:
         idx = type_logits.argmax(dim=-1)
         oh  = F.one_hot(idx, num_classes=self.cfg.type_dim).float()
-        # SIL (idx=1) and TR (idx=3) have cents=0 by definition — enforce this
-        # so the auto-regressive input matches what the model saw during training.
-        no_cents_mask = ((idx == 1) | (idx == 3)).float()
+        # SIL (idx=1), TRa (idx=4), TRd (idx=5) have cents=0 by definition.
+        no_cents_mask = ((idx == 1) | (idx == 4) | (idx == 5)).float()
         cents_in = cents_pred * (1.0 - no_cents_mask)
         return torch.cat([oh, dur_pred.unsqueeze(-1), cents_in.unsqueeze(-1)], dim=-1)
 
@@ -395,16 +403,19 @@ class SvaraGRUVAE(nn.Module):
             )
             idx = decoded["type_logits"].argmax(dim=-1)   # (batch, seq_len)
 
-            # Final-state constraint: STA (idx=2) cannot be the last segment.
-            # Replace terminal STA with TR (idx=3).
+            # Final-state constraint: STAp/STAt cannot be the last segment.
+            # STAp (idx=2) → TRd (idx=5);  STAt (idx=3) → TRa (idx=4).
             if use_hard_mask:
                 last_positions = (
                     pred_len.round().clamp(1, max_len).long() - 1
                 )  # (batch,)
                 for b in range(idx.size(0)):
                     last_pos = int(last_positions[b].item())
-                    if idx[b, last_pos].item() == 2:   # STA
-                        idx[b, last_pos] = 3            # → TR
+                    t = idx[b, last_pos].item()
+                    if t == 2:   # STAp → TRd
+                        idx[b, last_pos] = 5
+                    elif t == 3: # STAt → TRa
+                        idx[b, last_pos] = 4
 
             oh  = F.one_hot(idx, num_classes=self.cfg.type_dim).float()
             generated = torch.cat(
@@ -425,10 +436,10 @@ def reconstruction_loss(
     cfg: ModelConfig,
 ) -> tuple[torch.Tensor, dict]:
     """
-    targets: (batch, seq_len, MODEL_INPUT_DIM=6)
-        [:, :, :4]  one-hot type  [CP, SIL, STA, TR]
-        [:, :,  4]  dur_rel
-        [:, :,  5]  cents_norm
+    targets: (batch, seq_len, MODEL_INPUT_DIM=8)
+        [:, :, :6]  one-hot type  [CP, SIL, STAp, STAt, TRa, TRd]
+        [:, :,  6]  dur_rel
+        [:, :,  7]  cents_norm
     """
     device = targets.device
     batch_size, seq_len, _ = targets.shape
@@ -451,21 +462,26 @@ def reconstruction_loss(
         dur_loss_all   = F.mse_loss(outputs["duration"], target_duration, reduction="none")
         cents_loss_all = F.mse_loss(outputs["cents"],    target_cents,    reduction="none")
 
-    cp_mask  = targets[:, :, 0]   # (B, T)
-    sil_mask = targets[:, :, 1]   # (B, T)
-    sta_mask = targets[:, :, 2]   # (B, T)
-    tr_mask  = targets[:, :, 3]   # (B, T)
+    cp_mask   = targets[:, :, 0]   # (B, T)
+    sil_mask  = targets[:, :, 1]   # (B, T)
+    stap_mask = targets[:, :, 2]   # (B, T)
+    stat_mask = targets[:, :, 3]   # (B, T)
+    tra_mask  = targets[:, :, 4]   # (B, T)
+    trd_mask  = targets[:, :, 5]   # (B, T)
 
     dur_weight = (
-        cfg.lambda_dur_cp  * cp_mask  +
-        cfg.lambda_dur_sta * sta_mask +
-        cfg.lambda_dur_sil * sil_mask +
-        cfg.lambda_dur_tr  * tr_mask
+        cfg.lambda_dur_cp   * cp_mask   +
+        cfg.lambda_dur_stap * stap_mask +
+        cfg.lambda_dur_stat * stat_mask +
+        cfg.lambda_dur_sil  * sil_mask  +
+        cfg.lambda_dur_tra  * tra_mask  +
+        cfg.lambda_dur_trd  * trd_mask
     )
-    # TR and SIL have cents=0, weight=0 → no gradient for cents on those types
+    # TRa, TRd, SIL have cents=0 → no gradient for cents on those types
     cents_weight = (
-        cfg.lambda_cp_cents  * cp_mask  +
-        cfg.lambda_sta_cents * sta_mask
+        cfg.lambda_cp_cents    * cp_mask   +
+        cfg.lambda_stap_cents  * stap_mask +
+        cfg.lambda_stat_cents  * stat_mask
     )
 
     n = mask.sum().clamp_min(1.0)

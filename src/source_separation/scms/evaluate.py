@@ -48,9 +48,9 @@ PAPER_BASELINE = {
 
 ALL_SOURCES = ["original", "as", "unet"]
 SOURCE_LABEL = {
-    "original": "FTA-Net / original",
-    "as":       "FTA-Net / BS-RoFormer",
-    "unet":     "FTA-Net / U-Net",
+    "original": "FTA-C / original",
+    "as":       "FTA-C / BS-RoFormer",
+    "unet":     "FTA-C / U-Net",
 }
 THRESHOLDS_SWEEP = [0.3, 0.4, 0.5, 0.6, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95]
 

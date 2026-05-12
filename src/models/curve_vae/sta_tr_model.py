@@ -5,8 +5,7 @@ Model family (3 params):
     h(t; k, s, A) = tanh(k·(t−s)) + A·sin(2π·(t−0.5))
     y(t)          = [h(t)−h(0)] / [h(1)−h(0)]
 
-    STA: y(t)          — normally 0→1
-    TR:  1 − y(t)      — normally 1→0
+    STA and TR: y(t)   — normalized 0→1; synthesis scales to actual cents range
 
     A=0          → monotone tanh (pure S-curve)
     A moderate < 0 → plateau / slow-down at centre
@@ -32,7 +31,7 @@ import polars as pl
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 import settings as S
-from src.models.curve_vae.fit_sta_tr_curves import curve_model, curve_model_tr
+from src.models.curve_vae.fit_sta_tr_curves import curve_model
 
 FITTED       = S.DATA_INTERIM / "models" / "curve_vae" / "gt_curves_fitted.parquet"
 SVARA_LABELS = sorted(['D', 'G', 'M', 'N', 'P', 'R', 'S'])
@@ -82,9 +81,11 @@ class CurveModel:
     dists: dict[str, dict[str, KSADist]] = field(default_factory=dict)
 
     def fit(self, df: pl.DataFrame) -> "CurveModel":
-        for seg_type in ("STA", "TR"):
+        for seg_type in ("STAp", "STAt", "TRa", "TRd"):
             self.dists[seg_type] = {}
             sub = df.filter(pl.col("seg_type") == seg_type)
+            if len(sub) < MIN_COUNT:
+                continue
             self._fit_one(sub, seg_type, "pooled")
             for sv in SVARA_LABELS:
                 sv_sub = sub.filter(pl.col("svara_label") == sv)
@@ -124,7 +125,7 @@ class CurveModel:
         if rng is None:
             rng = np.random.default_rng()
 
-        fn  = curve_model if seg_type == "STA" else curve_model_tr
+        fn  = curve_model
         ks, ss, As = self._dist(seg_type, svara).sample(n, rng)
 
         return [
@@ -141,7 +142,7 @@ class CurveModel:
 
     def summary(self) -> str:
         lines = ["CurveModel — tanh+osc(k, s, A) trivariate Gaussian:"]
-        for seg_type in ("STA", "TR"):
+        for seg_type in ("STAp", "STAt", "TRa", "TRd"):
             for key in ["pooled"] + SVARA_LABELS:
                 if key in self.dists.get(seg_type, {}):
                     d     = self.dists[seg_type][key]
@@ -167,19 +168,15 @@ def main() -> None:
     rng = np.random.default_rng(0)
     t   = np.linspace(0, 1, 50)
 
-    print("\nSTA (svara=G, 4 samples):")
-    for g in model.generate("STA", svara="G", n=4, rng=rng):
-        y    = g["curve_fn"](t)
-        tag  = " [N-shape]" if g["is_nshape"] else ""
-        print(f"  k={g['k']:.2f}  s={g['s']:.3f}  A={g['A']:+.3f}{tag}  "
-              f"y_min={y.min():.3f}  y_max={y.max():.3f}")
-
-    print("\nTR (pooled, 4 samples):")
-    for g in model.generate("TR", n=4, rng=rng):
-        y    = g["curve_fn"](t)
-        tag  = " [N-shape]" if g["is_nshape"] else ""
-        print(f"  k={g['k']:.2f}  s={g['s']:.3f}  A={g['A']:+.3f}{tag}  "
-              f"y_min={y.min():.3f}  y_max={y.max():.3f}")
+    for seg_type in ("STAp", "STAt", "TRa", "TRd"):
+        if seg_type not in model.dists:
+            continue
+        print(f"\n{seg_type} (svara=G, 4 samples):")
+        for g in model.generate(seg_type, svara="G", n=4, rng=rng):
+            y    = g["curve_fn"](t)
+            tag  = " [N-shape]" if g["is_nshape"] else ""
+            print(f"  k={g['k']:.2f}  s={g['s']:.3f}  A={g['A']:+.3f}{tag}  "
+                  f"y_min={y.min():.3f}  y_max={y.max():.3f}")
 
 
 if __name__ == "__main__":

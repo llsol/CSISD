@@ -45,10 +45,12 @@ from src.features.structural_embedding import (
 )
 
 SEG_COLOR = {
-    "CP":  ("#4caf50", 0.18),
-    "STA": ("#e91e8c", 0.20),
-    "TR":  ("#ff9800", 0.18),
-    "SIL": ("#9e9e9e", 0.12),
+    "CP":   ("#4caf50", 0.18),
+    "STAp": ("#e91e8c", 0.20),
+    "STAt": ("#c2185b", 0.20),
+    "TRa":  ("#ff9800", 0.18),
+    "TRd":  ("#e65100", 0.18),
+    "SIL":  ("#9e9e9e", 0.12),
 }
 SVARA_COLORS = {
     "S": "#e6194b", "R": "#3cb44b", "G": "#4363d8",
@@ -185,13 +187,14 @@ def _draw_ax(
         color, alpha = SEG_COLOR.get(seg["type"], ("#000000", 0.1))
         ax.axvspan(seg["t_start"], seg["t_end"], color=color, alpha=alpha, lw=0)
         xm = (seg["t_start"] + seg["t_end"]) / 2
-        if seg["type"] in ("CP", "STA") and np.isfinite(seg["cents"]):
+        if seg["type"] in ("CP", "STAp", "STAt") and np.isfinite(seg["cents"]):
             y_pos = float(np.clip(seg["cents"], y_text_lo, y_text_hi))
-            ax.text(xm, y_pos, seg["type"][0],
+            label = seg["type"][:4]
+            ax.text(xm, y_pos, label,
                     ha="center", va="bottom", fontsize=5, color="black", zorder=5,
                     clip_on=True)
-        elif seg["type"] == "TR":
-            ax.text(xm, y_tr_label, "T",
+        elif seg["type"] in ("TRa", "TRd"):
+            ax.text(xm, y_tr_label, seg["type"],
                     ha="center", va="bottom", fontsize=5, color="black", zorder=5,
                     clip_on=True)
 
@@ -320,13 +323,16 @@ if __name__ == "__main__":
     parser.add_argument("--both",  action="store_true",
                         help="Show both segmentation strategies (two panels)")
     parser.add_argument("--all",   action="store_true",
-                        help="Plot all recordings → PNG files, no window")
+                        help="Plot all recordings → PNG files")
     parser.add_argument("--out",   default=None,
                         help="Save to this PNG path instead of showing")
+    parser.add_argument("--show",  action="store_true",
+                        help="Open interactive window after saving (for --all or --out)")
     args = parser.parse_args()
 
     if args.all:
-        matplotlib.use("Agg")
+        if not args.show:
+            matplotlib.use("Agg")
         out_dir = S.FIGURES_DIR / "structural_segments"
         out_dir.mkdir(parents=True, exist_ok=True)
         for rec_id in S.SARASUDA_VARNAM:
@@ -335,8 +341,8 @@ if __name__ == "__main__":
             fig = plot_piece_both_segmentations(rec_id, tonic)
             out = out_dir / f"{rec_id}_both.png"
             fig.savefig(out, dpi=120, bbox_inches="tight")
-            plt.close(fig)
             print(f"  → {out}")
+            plt.show() if args.show else plt.close(fig)
     else:
         rec_id = args.recording or S.SARASUDA_VARNAM[0]
         tonic  = S.SARASUDA_TONICS[rec_id]
@@ -348,5 +354,7 @@ if __name__ == "__main__":
             out.parent.mkdir(parents=True, exist_ok=True)
             fig.savefig(out, dpi=120, bbox_inches="tight")
             print(f"Saved → {out}")
+            if args.show:
+                plt.show()
         else:
             plt.show()

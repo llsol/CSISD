@@ -5,7 +5,7 @@ For each STA/TR segment we store:
     - t_norm   : np.ndarray (K,) — normalized time [0, 1]
     - p_norm   : np.ndarray (K,) — normalized pitch [0, 1]
                    STA: (cents - cents[0]) / (cents[-1] - cents[0])   0 → 1
-                   TR : (cents - cents[-1]) / (cents[0] - cents[-1])   1 → 0
+                   TR : (cents - cents[0]) / (cents[-1] - cents[0])   0 → 1
     - p_start_cents / p_end_cents : raw cents values at endpoints
     - dur_sec  : segment duration in seconds
     - recording_id, svara_label, seg_type, segment_uid
@@ -47,7 +47,7 @@ def extract_one_recording(
     recording_id: str,
     tonic_hz: float,
     min_samples: int = MIN_SAMPLES,
-    seg_types: tuple[str, ...] = ("STA", "TR"),
+    seg_types: tuple[str, ...] = ("STAp", "STAt", "TRa", "TRd"),
 ) -> list[dict]:
     """Extract all STA/TR normalized curves for one recording."""
     interim_root = Path("data/interim")
@@ -121,16 +121,9 @@ def extract_one_recording(
             p_end   = float(raw_cents[-1])
             delta   = p_end - p_start
 
-            if seg["type"] == "STA":
-                # normalize 0 → 1  (STA always goes up; enforce non-negative delta)
-                if abs(delta) < 1e-6:
-                    continue
-                p_norm = (raw_cents - p_start) / delta
-            else:  # TR
-                # normalize 1 → 0  (TR returns from high pitch; delta should be negative)
-                if abs(delta) < 1e-6:
-                    continue
-                p_norm = (raw_cents - p_end) / (-delta)   # maps p_end→0, p_start→1
+            if abs(delta) < 1e-6:
+                continue
+            p_norm = (raw_cents - p_start) / delta   # 0 → 1 for both STA and TR
 
             results.append({
                 "uid":            f"{recording_id}_{uid:05d}",
@@ -153,7 +146,7 @@ def extract_corpus(
     recording_ids: list[str] | None = None,
     tonic_map: dict[str, float] | None = None,
     min_samples: int = MIN_SAMPLES,
-    seg_types: tuple[str, ...] = ("STA", "TR"),
+    seg_types: tuple[str, ...] = ("STAp", "STAt", "TRa", "TRd"),
 ) -> pl.DataFrame:
     if recording_ids is None:
         recording_ids = S.SARASUDA_VARNAM
@@ -186,8 +179,10 @@ def main() -> None:
     df.write_parquet(out)
     print(f"Saved → {out}")
 
-    for seg_type in ("STA", "TR"):
+    for seg_type in ("STAp", "STAt", "TRa", "TRd"):
         sub = df.filter(pl.col("seg_type") == seg_type)
+        if len(sub) == 0:
+            continue
         print(f"  {seg_type}: {len(sub)} curves  "
               f"dur={sub['dur_sec'].mean():.3f}s mean  "
               f"samples={sub['n_samples'].mean():.1f} mean")
