@@ -9,8 +9,10 @@ Encoder input per segment (ENC_INPUT_DIM = 11):
     For CP: last 3 dims = 0 (no tanh+osc fit).
 
 Decoder input per segment (DEC_INPUT_DIM = 9):
-    seg_type_oh(6) | dur_rel(1) | delta_norm(1) | slope_prev_norm(1)
-    slope_prev_norm = tanh(slope_end_{t-1} / SLOPE_SCALE);  0 for the first segment.
+    seg_type_oh(6) | dur_rel(1) | delta_norm(1) | dy0_required_norm(1)
+    dy0_required_norm = tanh(dy0_required / M_SCALE)
+    dy0_required = norm_deriv_at(0, k_gt, s_gt, A_gt) for STA/TR; 0 otherwise.
+    At inference: propagated from m1 of the previous STA/TR segment.
 
 Targets (OUTPUT_DIM = 3), masked to STA/TR only:
     log_k_raw = log(k) / LOG_K_SCALE
@@ -48,16 +50,19 @@ S_MIN, S_MAX   = 0.01, 0.99
 A_SCALE        = 0.4        # A_osc in [-0.4, 0.2]; scale by max(|A_MIN|, A_MAX)
 LOG_K_SCALE    = math.log(K_MAX)           # ≈ 2.30
 LOGIT_S_SCALE  = 5.0                       # logit([0.01,0.99]) ≈ [-4.6, 4.6]
-SLOPE_SCALE    = 300.0                     # ¢/s; tanh squash
+SLOPE_SCALE    = 300.0                     # ¢/s; tanh squash (kept for diagnostics)
+M_SCALE        = 5.0                       # normalized slope (dimensionless); tanh squash
 
 ENC_INPUT_DIM  = 11  # seg_oh(6) + dur_rel + delta_norm + log_k_raw + logit_s_raw + A_raw
-DEC_INPUT_DIM  = 9   # seg_oh(6) + dur_rel + delta_norm + slope_prev_norm
+DEC_INPUT_DIM  = 9   # seg_oh(6) + dur_rel + delta_norm + dy0_required_norm
 OUTPUT_DIM     = 3   # log_k_raw, logit_s_raw, A_raw
 
 # Svara labels (alphabetical, matches gruvae)
 from src.models.gruvae.dataset_gruvae import SVARA_TO_IDX, SVARA_LABELS  # noqa: E402
 
 SHAPES_PATH = S.INTERIM_ANALYSIS / "segment_shapes.parquet"
+
+from src.models.curve_vae.fit_sta_tr_curves import norm_deriv_at  # noqa: E402
 
 
 # ── boundary slope helpers ────────────────────────────────────────────────────
@@ -138,12 +143,12 @@ def _build_sequence(rows: list[dict], total_dur: float, svara_idx: int) -> dict 
 
     slope_ends = _compute_slopes(rows)
 
-    enc_input   = np.zeros((n, ENC_INPUT_DIM), dtype=np.float32)
-    dec_struct  = np.zeros((n, DEC_INPUT_DIM - 1), dtype=np.float32)   # without slope_prev
-    slope_prev_gt = np.zeros(n, dtype=np.float32)                       # GT slope_prev per step
-    targets     = np.zeros((n, OUTPUT_DIM), dtype=np.float32)
-    target_mask = np.zeros(n, dtype=bool)
-    dur_sec_arr = np.zeros(n, dtype=np.float32)
+    enc_input       = np.zeros((n, ENC_INPUT_DIM), dtype=np.float32)
+    dec_struct      = np.zeros((n, DEC_INPUT_DIM - 1), dtype=np.float32)  # without dy0_required
+    dy0_required_gt = np.zeros(n, dtype=np.float32)  # GT required start slope per step
+    targets         = np.zeros((n, OUTPUT_DIM), dtype=np.float32)
+    target_mask     = np.zeros(n, dtype=bool)
+    dur_sec_arr     = np.zeros(n, dtype=np.float32)
     delta_cents_arr = np.zeros(n, dtype=np.float32)
 
     for i, r in enumerate(rows):
@@ -171,16 +176,15 @@ def _build_sequence(rows: list[dict], total_dur: float, svara_idx: int) -> dict 
         dur_sec_arr[i]    = r["dur_sec"]
         delta_cents_arr[i] = delta
 
-        # slope_prev for this step = slope_end of previous step.
-        # Reset to 0 after CP/SIL to match inference behaviour (slope_prev
-        # is reset to 0 in ParamGRU.generate() for non-STA/TR steps).
-        if i > 0:
-            prev_type = rows[i - 1]["seg_type"]
-            slope_prev_gt[i] = (
-                slope_ends[i - 1]
-                if prev_type in ("STAp", "STAt", "TRa", "TRd")
-                else 0.0
-            )
+        # dy0_required for this step: the normalized slope that the curve
+        # at this step should naturally start with (from its own GT fit).
+        # For STA/TR with fitted params: norm_deriv_at(0, k, s, A).
+        # For CP/SIL (or missing params): 0 — no constraint.
+        if has_params:
+            k_v = r["k_steep"]  if r["k_steep"]  is not None else 1.0
+            s_v = r["s_inflect"] if r["s_inflect"] is not None else 0.5
+            A_v = r["A_osc"]    if r["A_osc"]    is not None else 0.0
+            dy0_required_gt[i] = norm_deriv_at(k_v, s_v, A_v, at_end=False)
 
         # target
         if has_params:
@@ -189,18 +193,19 @@ def _build_sequence(rows: list[dict], total_dur: float, svara_idx: int) -> dict 
                                _safe_A(r["A_osc"])]
             target_mask[i] = True
 
-    # decoder input: append slope_prev_norm (tanh-squashed)
-    slope_prev_norm = np.tanh(slope_prev_gt / SLOPE_SCALE).reshape(n, 1)
-    dec_input = np.concatenate([dec_struct, slope_prev_norm], axis=1).astype(np.float32)
+    # decoder input: append dy0_required_norm (tanh-squashed normalized slope)
+    dy0_required_norm = np.tanh(dy0_required_gt / M_SCALE).reshape(n, 1)
+    dec_input = np.concatenate([dec_struct, dy0_required_norm], axis=1).astype(np.float32)
 
     return {
-        "enc_input":    torch.from_numpy(enc_input),
-        "dec_input":    torch.from_numpy(dec_input),
-        "targets":      torch.from_numpy(targets),
-        "target_mask":  torch.from_numpy(target_mask),
-        "slope_end_gt": torch.tensor(slope_ends, dtype=torch.float32),
-        "dur_sec":      torch.from_numpy(dur_sec_arr),
-        "delta_cents":  torch.from_numpy(delta_cents_arr),
+        "enc_input":         torch.from_numpy(enc_input),
+        "dec_input":         torch.from_numpy(dec_input),
+        "targets":           torch.from_numpy(targets),
+        "target_mask":       torch.from_numpy(target_mask),
+        "dy0_required_norm": torch.from_numpy(dy0_required_norm.squeeze(1).astype(np.float32)),
+        "slope_end_gt":      torch.tensor(slope_ends, dtype=torch.float32),
+        "dur_sec":           torch.from_numpy(dur_sec_arr),
+        "delta_cents":       torch.from_numpy(delta_cents_arr),
         "svara_idx":    torch.tensor(svara_idx, dtype=torch.long),
         "total_dur":    torch.tensor(total_dur, dtype=torch.float32),
         "length":       torch.tensor(n, dtype=torch.long),
@@ -235,37 +240,40 @@ def collate_param_batch(batch: list[dict]) -> dict:
     T        = int(lengths.max().item())
     B        = len(batch)
 
-    enc_input   = torch.zeros(B, T, ENC_INPUT_DIM)
-    dec_input   = torch.zeros(B, T, DEC_INPUT_DIM)
-    targets     = torch.zeros(B, T, OUTPUT_DIM)
-    target_mask = torch.zeros(B, T, dtype=torch.bool)
-    slope_end_gt = torch.zeros(B, T)
-    dur_sec     = torch.zeros(B, T)
-    delta_cents = torch.zeros(B, T)
-    svara_idx   = torch.zeros(B, dtype=torch.long)
-    total_dur   = torch.zeros(B)
+    enc_input        = torch.zeros(B, T, ENC_INPUT_DIM)
+    dec_input        = torch.zeros(B, T, DEC_INPUT_DIM)
+    targets          = torch.zeros(B, T, OUTPUT_DIM)
+    target_mask      = torch.zeros(B, T, dtype=torch.bool)
+    dy0_required_norm = torch.zeros(B, T)
+    slope_end_gt     = torch.zeros(B, T)
+    dur_sec          = torch.zeros(B, T)
+    delta_cents      = torch.zeros(B, T)
+    svara_idx        = torch.zeros(B, dtype=torch.long)
+    total_dur        = torch.zeros(B)
 
     for i, item in enumerate(batch):
         n = item["length"].item()
-        enc_input[i, :n]   = item["enc_input"]
-        dec_input[i, :n]   = item["dec_input"]
-        targets[i, :n]     = item["targets"]
-        target_mask[i, :n] = item["target_mask"]
-        slope_end_gt[i, :n] = item["slope_end_gt"]
-        dur_sec[i, :n]     = item["dur_sec"]
-        delta_cents[i, :n] = item["delta_cents"]
-        svara_idx[i]       = item["svara_idx"]
-        total_dur[i]       = item["total_dur"]
+        enc_input[i, :n]         = item["enc_input"]
+        dec_input[i, :n]         = item["dec_input"]
+        targets[i, :n]           = item["targets"]
+        target_mask[i, :n]       = item["target_mask"]
+        dy0_required_norm[i, :n] = item["dy0_required_norm"]
+        slope_end_gt[i, :n]      = item["slope_end_gt"]
+        dur_sec[i, :n]           = item["dur_sec"]
+        delta_cents[i, :n]       = item["delta_cents"]
+        svara_idx[i]             = item["svara_idx"]
+        total_dur[i]             = item["total_dur"]
 
     return {
-        "enc_input":    enc_input,
-        "dec_input":    dec_input,
-        "targets":      targets,
-        "target_mask":  target_mask,
-        "slope_end_gt": slope_end_gt,
-        "dur_sec":      dur_sec,
-        "delta_cents":  delta_cents,
-        "svara_idx":    svara_idx,
-        "total_dur":    total_dur,
-        "lengths":      lengths,
+        "enc_input":         enc_input,
+        "dec_input":         dec_input,
+        "targets":           targets,
+        "target_mask":       target_mask,
+        "dy0_required_norm": dy0_required_norm,
+        "slope_end_gt":      slope_end_gt,
+        "dur_sec":           dur_sec,
+        "delta_cents":       delta_cents,
+        "svara_idx":         svara_idx,
+        "total_dur":         total_dur,
+        "lengths":           lengths,
     }

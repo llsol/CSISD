@@ -54,6 +54,22 @@ A_MIN, A_MAX = -0.4,  0.2
 # Model
 # ---------------------------------------------------------------------------
 
+def norm_deriv_at(k: float, s: float, A: float, at_end: bool) -> float:
+    """Normalized derivative of curve_model at t=0 (at_end=False) or t=1 (at_end=True).
+
+    Returns dy/dt in normalized [0,1]→[0,1] space (dimensionless).
+    Multiply by delta_cents/dur_sec to get physical slope in ¢/s.
+    """
+    h0 = np.tanh(-k * s)
+    h1 = np.tanh(k * (1.0 - s))
+    d  = h1 - h0
+    if abs(d) < 1e-9:
+        return 1.0
+    arg = k * (1.0 - s) if at_end else k * s
+    dh  = k / np.cosh(arg) ** 2 - 2.0 * np.pi * A
+    return float(dh / d)
+
+
 def _h(t: np.ndarray, k: float, s: float, A: float) -> np.ndarray:
     return np.tanh(k * (t - s)) + A * np.sin(2 * np.pi * (t - 0.5))
 
@@ -136,12 +152,17 @@ def fit_corpus(df: pl.DataFrame) -> pl.DataFrame:
                   f"elapsed={elapsed:.0f}s  ETA={eta:.0f}s  "
                   f"last rmse={rmse:.4f}")
 
+    m0s = [norm_deriv_at(k, s, A, at_end=False) for k, s, A in zip(ks, ss, As)]
+    m1s = [norm_deriv_at(k, s, A, at_end=True)  for k, s, A in zip(ks, ss, As)]
+
     return df.with_columns([
-        pl.Series("k_steep",   ks,    dtype=pl.Float32),
-        pl.Series("s_inflect", ss,    dtype=pl.Float32),
-        pl.Series("A_osc",     As,    dtype=pl.Float32),
-        pl.Series("rmse",      rmses, dtype=pl.Float32),
-        pl.Series("r2",        r2s,   dtype=pl.Float32),
+        pl.Series("k_steep",    ks,    dtype=pl.Float32),
+        pl.Series("s_inflect",  ss,    dtype=pl.Float32),
+        pl.Series("A_osc",      As,    dtype=pl.Float32),
+        pl.Series("rmse",       rmses, dtype=pl.Float32),
+        pl.Series("r2",         r2s,   dtype=pl.Float32),
+        pl.Series("m0_norm_gt", m0s,   dtype=pl.Float32),
+        pl.Series("m1_norm_gt", m1s,   dtype=pl.Float32),
     ])
 
 

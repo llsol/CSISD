@@ -24,7 +24,7 @@ import settings as S
 from src.models.param_gru.dataset_param_gru import build_dataset, collate_param_batch
 from src.models.param_gru.model_param_gru import (
     ParamGRUConfig, ParamGRU, total_loss, fit_residuals, save_residuals,
-    b2_slope_loss,
+    b2_slope_loss,   # kept for diagnostic sanity check post-training
 )
 
 
@@ -162,7 +162,7 @@ def main() -> None:
                 f"tr={tr_stats['total_loss']:.4f}  "
                 f"val={val_loss:.4f}  "
                 f"recon={tr_stats['recon_loss']:.4f}  "
-                f"b2={tr_stats['b2_loss']:.4f}  "
+                f"slope_start={tr_stats['slope_start_loss']:.4f}  "
                 f"t={elapsed:.0f}s"
             )
 

@@ -29,7 +29,7 @@ from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from src.models.param_gru.dataset_param_gru import (
     DEC_INPUT_DIM, OUTPUT_DIM,
     K_MIN, K_MAX, S_MIN, S_MAX,
-    A_SCALE, LOG_K_SCALE, LOGIT_S_SCALE, SLOPE_SCALE,
+    A_SCALE, LOG_K_SCALE, LOGIT_S_SCALE, SLOPE_SCALE, M_SCALE,
 )
 from src.models.gruvae.model_gruvae import lengths_to_mask  # noqa: F401
 
@@ -138,7 +138,30 @@ def load_residuals(path: Path | str) -> dict[str, ResidualDist]:
     return {k: ResidualDist(mean=data[f"{k}_mean"], cov=data[f"{k}_cov"]) for k in keys}
 
 
-# ── differentiable slope ──────────────────────────────────────────────────────
+# ── differentiable slopes ─────────────────────────────────────────────────────
+
+def _norm_slope_torch(
+    log_k_raw:   torch.Tensor,
+    logit_s_raw: torch.Tensor,
+    A_raw:       torch.Tensor,
+    at_end:      bool,
+) -> torch.Tensor:
+    """Normalized derivative of curve_model at t=0 or t=1 (dimensionless).
+
+    Multiply by delta_cents / dur_sec to obtain the physical slope in ¢/s.
+    """
+    k = torch.exp(log_k_raw * LOG_K_SCALE).clamp(K_MIN, K_MAX)
+    s = torch.sigmoid(logit_s_raw * LOGIT_S_SCALE).clamp(S_MIN, S_MAX)
+    A = A_raw * A_SCALE
+
+    h0    = torch.tanh(-k * s)
+    h1    = torch.tanh(k * (1.0 - s))
+    denom = (h1 - h0).clamp(min=1e-9)
+
+    arg = k * (1.0 - s) if at_end else k * s
+    dh  = k / torch.cosh(arg).pow(2) - 2.0 * math.pi * A
+    return dh / denom
+
 
 def _slope_torch(
     log_k_raw:   torch.Tensor,
@@ -258,17 +281,17 @@ class ParamGRU(nn.Module):
         # Precompute svara label per batch element for residual lookup
         sv_labels = [svara_labels[int(svara_idx[b].item())] for b in range(B)]
 
-        slope_prev = torch.zeros(B, device=device)
-        all_params = []
-        all_slopes = []
+        dy0_required = torch.zeros(B, device=device)
+        all_params   = []
+        all_slopes   = []
 
         for t in range(T):
-            slope_prev_n = torch.tanh(slope_prev / SLOPE_SCALE).unsqueeze(-1)
+            dy0_req_n = torch.tanh(dy0_required / M_SCALE).unsqueeze(-1)
             x_t = torch.cat([
                 seg_type_oh[:, t, :],
                 dur_rel[:, t].unsqueeze(-1),
                 delta_norm[:, t].unsqueeze(-1),
-                slope_prev_n,
+                dy0_req_n,
             ], dim=-1)
 
             params_t, hidden = self.decoder.generate_step(x_t, hidden, cond)
@@ -291,12 +314,31 @@ class ParamGRU(nn.Module):
 
             all_params.append(params_t)
 
+            # Propagate dy0_required to next step: C1 constraint.
+            # m1_t * delta_t / dur_t = v_end_t (physical ¢/s)
+            # dy0_required_{t+1} = v_end_t * dur_{t+1} / delta_{t+1}
+            if t + 1 < T:
+                m1_t    = _norm_slope_torch(params_t[:, 0], params_t[:, 1], params_t[:, 2], at_end=True)
+                v_end_t = m1_t * delta_cents[:, t] / dur_sec[:, t].clamp(min=1e-4)
+                d_next  = delta_cents[:, t + 1]
+                dur_next = dur_sec[:, t + 1]
+                # Only propagate when current AND next segment are STA/TR;
+                # reset to 0 across CP/SIL boundaries.
+                both_active = sta_tr_mask[:, t].float() * sta_tr_mask[:, t + 1].float()
+                dy0_next = torch.where(
+                    d_next.abs() > 1.0,
+                    v_end_t * dur_next / d_next,
+                    torch.zeros_like(v_end_t),
+                ) * both_active
+                dy0_required = dy0_next
+            else:
+                dy0_required = torch.zeros(B, device=device)
+
             slope_end_t = _slope_torch(
                 params_t[:, 0], params_t[:, 1], params_t[:, 2],
                 delta_cents[:, t], dur_sec[:, t], at_end=True,
             )
-            slope_prev = slope_end_t * sta_tr_mask[:, t].float()
-            all_slopes.append(slope_prev)
+            all_slopes.append(slope_end_t * sta_tr_mask[:, t].float())
 
         return {
             "params": torch.stack(all_params, dim=1),
@@ -314,6 +356,24 @@ class ParamGRU(nn.Module):
 
 
 # ── losses ────────────────────────────────────────────────────────────────────
+
+def slope_start_loss(
+    params:            torch.Tensor,   # (B, T, 3)
+    target_mask:       torch.Tensor,   # (B, T) bool
+    dy0_required_norm: torch.Tensor,   # (B, T) tanh-squashed GT start slope
+) -> torch.Tensor:
+    """MSE between model's implied start slope and the required start slope.
+
+    Both compared in tanh(m/M_SCALE) space for numerical stability.
+    The model is trained to pick (k,s,A) that naturally produce the right
+    start slope within the tanh+osc function family.
+    """
+    if not target_mask.any():
+        return torch.tensor(0.0, device=params.device)
+    m0_pred   = _norm_slope_torch(params[..., 0], params[..., 1], params[..., 2], at_end=False)
+    m0_pred_n = torch.tanh(m0_pred / M_SCALE)
+    return F.mse_loss(m0_pred_n[target_mask], dy0_required_norm[target_mask])
+
 
 def b2_slope_loss(
     params:      torch.Tensor,
@@ -353,20 +413,19 @@ def total_loss(
     batch:   dict,
     cfg:     ParamGRUConfig,
 ) -> tuple[torch.Tensor, dict]:
-    params      = outputs["params"]
-    target_mask = batch["target_mask"]
-    targets     = batch["targets"]
-    dur_sec     = batch["dur_sec"]
-    delta_cents = batch["delta_cents"]
+    params             = outputs["params"]
+    target_mask        = batch["target_mask"]
+    targets            = batch["targets"]
+    dy0_required_norm  = batch["dy0_required_norm"]
 
-    recon = reconstruction_loss(params, targets, target_mask)
-    b2    = b2_slope_loss(params, target_mask, dur_sec, delta_cents)
-    total = recon + cfg.lambda_slope * b2
+    recon    = reconstruction_loss(params, targets, target_mask)
+    slope_s  = slope_start_loss(params, target_mask, dy0_required_norm)
+    total    = recon + cfg.lambda_slope * slope_s
 
     return total, {
-        "total_loss": total.detach(),
-        "recon_loss": recon.detach(),
-        "b2_loss":    b2.detach(),
+        "total_loss":       total.detach(),
+        "recon_loss":       recon.detach(),
+        "slope_start_loss": slope_s.detach(),
     }
 
 
