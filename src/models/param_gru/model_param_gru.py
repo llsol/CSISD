@@ -249,17 +249,18 @@ class ParamGRU(nn.Module):
 
     def generate(
         self,
-        seg_type_oh:    torch.Tensor,                      # (B, T, 6)
-        dur_rel:        torch.Tensor,                      # (B, T)
-        delta_norm:     torch.Tensor,                      # (B, T)
-        dur_sec:        torch.Tensor,                      # (B, T)
-        delta_cents:    torch.Tensor,                      # (B, T)
-        sta_tr_mask:    torch.Tensor,                      # (B, T) bool
-        lengths:        torch.Tensor,                      # (B,)
-        svara_idx:      torch.Tensor,                      # (B,)
-        total_dur:      torch.Tensor,                      # (B,)
-        residual_dists: dict[str, ResidualDist] | None = None,
-        rng:            np.random.Generator | None = None,
+        seg_type_oh:        torch.Tensor,                  # (B, T, 6)
+        dur_rel:            torch.Tensor,                  # (B, T)
+        delta_norm:         torch.Tensor,                  # (B, T)
+        dur_sec:            torch.Tensor,                  # (B, T)
+        delta_cents:        torch.Tensor,                  # (B, T)
+        sta_tr_mask:        torch.Tensor,                  # (B, T) bool
+        lengths:            torch.Tensor,                  # (B,)
+        svara_idx:          torch.Tensor,                  # (B,)
+        total_dur:          torch.Tensor,                  # (B,)
+        residual_dists:     dict[str, ResidualDist] | None = None,
+        rng:                np.random.Generator | None = None,
+        dy0_required_init:  torch.Tensor | None = None,   # (B, T) boundary init slopes
     ) -> dict:
         """
         Autoregressive generation.
@@ -286,6 +287,11 @@ class ParamGRU(nn.Module):
         all_slopes   = []
 
         for t in range(T):
+            # At boundary (dy0_required==0 and STA/TR): inject pre-computed init
+            if dy0_required_init is not None:
+                is_boundary = (dy0_required == 0.0) & sta_tr_mask[:, t]
+                dy0_required = torch.where(is_boundary, dy0_required_init[:, t], dy0_required)
+
             dy0_req_n = torch.tanh(dy0_required / M_SCALE).unsqueeze(-1)
             x_t = torch.cat([
                 seg_type_oh[:, t, :],

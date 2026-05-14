@@ -8,9 +8,10 @@ Segment curve models
   TR  : ParamGRUVAE (or CurveModel fallback) — 0→1 tanh+osc, scaled to endpoints
   SIL : NaN
 
-Endpoint resolution rules
+Endpoint resolution rules (C0)
 --------------------------
   STA.end     = STA.cents  (peak value from GRU+VAE)
+  STA→CP end  = first sample of next CP curve (override STA.cents)
   STA.start   = prev segment end
   TR.start    = prev segment end
   TR→CP  end  = first sample of next CP curve (from CPVAE phase-1)
@@ -19,13 +20,23 @@ Endpoint resolution rules
   TR (last)   : end sampled from GT ending_pitch_stats
   CP          : CPVAE handles deviations; ref pitch = mean_cents
 
+Derivative continuity rules (C1)
+---------------------------------
+  CP→STA/TR   : dy0_required = CP end-slope  (physical finite-diff → normalized)
+  STA/TR→CP   : m1_required  = CP start-slope (→ analytic A adjustment)
+  STA/TR start (after SIL/svara start): dy0_required sampled from GT (BoundarySlopeSampler)
+  TR→SIL / TR at end: m1_required sampled from GT (BoundarySlopeSampler)
+  STA/TR→STA/TR: dy0 propagated auto-regressively through ParamGRU generate()
+
 Synthesis phases
 ----------------
-  1 — Generate all CP curves (CPVAE) so their endpoints are known.
-  2 — Resolve start/end cents for every segment (endpoint pre-pass).
-  3 — Generate (k, s, A) for STA/TR via ParamGRUVAE (autoregressive, B2-aware)
+  1 — Generate all CP curves (CPVAE); compute their boundary slopes (¢/s).
+  2 — Resolve start/end cents for every segment (endpoint pre-pass, C0).
+  3 — Boundary slope pre-pass: fill dy0_init_arr and m1_req_dict (C1).
+  4 — Generate (k, s, A) for STA/TR via ParamGRUVAE (autoregressive)
         or sample independently from CurveModel if no checkpoint.
-  4 — Render actual pitch curves from params.
+        Analytic A adjustment applied where m1_req_dict is set.
+  5 — Render actual pitch curves from params.
 
 Usage
 -----
@@ -54,6 +65,9 @@ from src.models.gruvae.model_gruvae import ModelConfig, SvaraGRUVAE
 from src.models.curve_vae.cp_vae import CPVAE, CPVAEConfig
 from src.models.curve_vae.sta_tr_model import CurveModel
 from src.models.curve_vae.fit_sta_tr_curves import curve_model as _param_curve_fn, A_MIN, A_MAX
+from src.models.synthesis.boundary_slopes import (
+    BoundarySlopeSampler, load_boundary_sampler, solve_A_for_m1,
+)
 from src.models.param_gru.model_param_gru import ParamGRUConfig, ParamGRU, ResidualDist, load_residuals
 from src.models.param_gru.dataset_param_gru import SVARA_TO_IDX as _PARAM_SVARA_IDX
 from src.models.synthesis.ending_pitch_stats import (
@@ -206,18 +220,20 @@ def synthesize_svara(
     use_hard_mask: bool = True,
     rng:           np.random.Generator | None = None,
     verbose:       bool = False,
-    param_gruvae:    ParamGRU | None = None,
-    residual_dists:  dict | None = None,
-    df_curves:       pl.DataFrame | None = None,
+    param_gruvae:      ParamGRU | None = None,
+    residual_dists:    dict | None = None,
+    df_curves:         pl.DataFrame | None = None,
+    boundary_sampler:  BoundarySlopeSampler | None = None,
 ) -> tuple[np.ndarray, list[dict]]:
     """
-    Generate one svara pitch contour (four phases).
+    Generate one svara pitch contour (five phases).
 
-    Phase 1 — Generate all CP curves (CPVAE) so their endpoints are known.
-    Phase 2 — Resolve start/end cents for every segment (endpoint pre-pass).
-    Phase 3 — Generate (k, s, A) for STA/TR via ParamGRUVAE (if available)
+    Phase 1 — Generate all CP curves (CPVAE); compute boundary slopes.
+    Phase 2 — Resolve start/end cents for every segment (C0 continuity).
+    Phase 3 — Boundary slope pre-pass: fill dy0_init_arr / m1_req_dict (C1).
+    Phase 4 — Generate (k, s, A) for STA/TR via ParamGRUVAE (if available)
                or sample from CurveModel Gaussian (fallback).
-    Phase 4 — Render pitch arrays from params.
+    Phase 5 — Render pitch arrays from params.
 
     Returns
     -------
@@ -233,9 +249,13 @@ def synthesize_svara(
     for s in segs:
         s["dur_sec"] = s["dur_abs_sec"]
 
-    # ── phase 1: generate all CP curves ─────────────────────────────────────
+    # ── phase 1: generate all CP curves; compute boundary slopes (¢/s) ─────
     sv_t = torch.tensor([SVARA_TO_IDX[svara_label]], dtype=torch.long, device=device)
-    cp_curves: dict[int, np.ndarray] = {}
+    cp_curves:  dict[int, np.ndarray] = {}
+    cp_m0_phys: dict[int, float]      = {}   # physical slope at CP start (¢/s)
+    cp_m1_phys: dict[int, float]      = {}   # physical slope at CP end   (¢/s)
+
+    _SLOPE_WIN = 4   # samples for finite-diff slope estimate
 
     for i, seg in enumerate(segs):
         if seg["type"] != "CP":
@@ -246,7 +266,16 @@ def synthesize_svara(
             cpvae.generate(1, sv_t, dur_t, scale=scale, verbose=verbose)
             .cpu().numpy()[0] * scale
         )
-        cp_curves[i] = seg["cents"] + _resample(dev64, n)
+        curve = seg["cents"] + _resample(dev64, n)
+        cp_curves[i] = curve
+
+        win = min(_SLOPE_WIN, len(curve) - 1)
+        if win > 0:
+            cp_m0_phys[i] = (curve[win]  - curve[0])       / (win / SYNTH_SR)
+            cp_m1_phys[i] = (curve[-1]   - curve[-(win+1)]) / (win / SYNTH_SR)
+        else:
+            cp_m0_phys[i] = 0.0
+            cp_m1_phys[i] = 0.0
 
     # ── phase 2: resolve endpoints for all segments ──────────────────────────
     # Initialise prev_end from GT start-pitch distribution for the first
@@ -290,7 +319,11 @@ def synthesize_svara(
 
         elif seg["type"] in ("STAp", "STAt"):
             seg["start_cents"] = prev_end
-            seg["end_cents"]   = seg["cents"]
+            # C0: if next seg is CP, force end to CP's actual first sample
+            if next_seg is not None and next_seg["type"] == "CP":
+                seg["end_cents"] = float(cp_curves[i + 1][0])
+            else:
+                seg["end_cents"] = seg["cents"]
             prev_end = seg["end_cents"]
 
         elif seg["type"] in ("TRa", "TRd"):
@@ -308,7 +341,76 @@ def synthesize_svara(
             seg["end_cents"] = end
             prev_end = end
 
-    # ── phase 3: generate (k, s, A) for STA/TR ──────────────────────────────
+    # ── boundary slope pre-pass (C1) ────────────────────────────────────────
+    # For each STA/TR we determine two slope constraints:
+    #   dy0_init_arr[i]  — required normalized start slope (raw, tanh applied in generate())
+    #   m1_req_dict[i]   — required normalized end slope (→ analytic A adjustment)
+    #
+    # Priority for dy0 (start):
+    #   CP → STA/TR  : CP end slope      (physical finite-diff, converted to normalized)
+    #   SIL / start  : GT distribution   (BoundarySlopeSampler, Case B)
+    #   STA/TR→STA/TR: auto-regressive   (propagated inside generate(), no init)
+    #
+    # Priority for m1 (end):
+    #   STA/TR → CP  : CP start slope    (physical finite-diff, converted to normalized)
+    #   TR → SIL/end : GT distribution   (BoundarySlopeSampler, Case A)
+    n_segs = len(segs)
+    dy0_init_arr  = np.zeros(n_segs, dtype=np.float32)
+    m1_req_dict: dict[int, float] = {}
+
+    _STA_TR_TYPES = {"STAp", "STAt", "TRa", "TRd"}
+
+    for i, seg in enumerate(segs):
+        stype    = seg["type"]
+        if stype not in _STA_TR_TYPES:
+            continue
+        delta_i  = seg["end_cents"] - seg["start_cents"]
+        dur_i    = seg["dur_sec"]
+        prev_seg = segs[i - 1] if i > 0 else None
+        next_seg = segs[i + 1] if i + 1 < n_segs else None
+
+        # ── dy0: start-slope requirement ──────────────────────────────────
+        if prev_seg is not None and prev_seg["type"] == "CP":
+            m1_cp = cp_m1_phys.get(i - 1, 0.0)
+            if abs(delta_i) > 1.0 and dur_i > 1e-4:
+                dy0_init_arr[i] = m1_cp * dur_i / delta_i
+        elif boundary_sampler is not None and (
+            prev_seg is None or prev_seg["type"] == "SIL"
+        ):
+            dy0_init_arr[i] = boundary_sampler.sample_dy0_for_boundary_start(
+                stype, svara_label, delta_i, dur_i, rng,
+            )
+        # else: preceded by STA/TR → auto-regressive chain in generate()
+
+        # ── m1: end-slope requirement ──────────────────────────────────────
+        if next_seg is not None and next_seg["type"] == "CP":
+            m0_cp = cp_m0_phys.get(i + 1, 0.0)
+            if abs(delta_i) > 1.0 and dur_i > 1e-4:
+                m1_req_dict[i] = m0_cp * dur_i / delta_i
+        elif boundary_sampler is not None and stype in ("TRa", "TRd"):
+            is_end_boundary = next_seg is None or next_seg["type"] == "SIL"
+            if is_end_boundary:
+                next_voiced = next(
+                    (segs[j] for j in range(i + 1, n_segs)
+                     if segs[j]["type"] != "SIL"),
+                    None,
+                )
+                if next_voiced is not None and next_voiced["type"] in _STA_TR_TYPES:
+                    delta_succ = next_voiced["end_cents"] - next_voiced["start_cents"]
+                    dur_succ   = next_voiced["dur_sec"]
+                    m1_req = boundary_sampler.compute_m1_from_successor(
+                        next_voiced["type"], svara_label,
+                        delta_succ, dur_succ,
+                        delta_i, dur_i, rng,
+                    )
+                else:
+                    m1_req = boundary_sampler.sample_m1_for_boundary_end(
+                        stype, svara_label, rng,
+                    )
+                if m1_req is not None:
+                    m1_req_dict[i] = m1_req
+
+    # ── phase 4: generate (k, s, A) for STA/TR ──────────────────────────────
     seg_params: dict[int, tuple[float, float, float]] = {}
 
     if param_gruvae is not None:
@@ -332,59 +434,78 @@ def synthesize_svara(
             delta_c[0, i]   = d
             sta_tr_m[0, i]  = seg["type"] in ("STAp", "STAt", "TRa", "TRd")
 
+        dy0_init_t = torch.from_numpy(dy0_init_arr[np.newaxis, :]).to(device)  # (1, n_segs)
+
         with torch.no_grad():
             result = param_gruvae.generate(
-                seg_type_oh    = torch.from_numpy(seg_oh).to(device),
-                dur_rel        = torch.from_numpy(dur_rel_t).to(device),
-                delta_norm     = torch.from_numpy(delta_n).to(device),
-                dur_sec        = torch.from_numpy(dur_sec_t).to(device),
-                delta_cents    = torch.from_numpy(delta_c).to(device),
-                sta_tr_mask    = torch.from_numpy(sta_tr_m).to(device),
-                lengths        = torch.tensor([n_segs], device=device),
-                svara_idx      = torch.tensor([_PARAM_SVARA_IDX[svara_label]], device=device),
-                total_dur      = torch.tensor([total_dur], device=device),
-                residual_dists = residual_dists,
-                rng            = rng,
+                seg_type_oh       = torch.from_numpy(seg_oh).to(device),
+                dur_rel           = torch.from_numpy(dur_rel_t).to(device),
+                delta_norm        = torch.from_numpy(delta_n).to(device),
+                dur_sec           = torch.from_numpy(dur_sec_t).to(device),
+                delta_cents       = torch.from_numpy(delta_c).to(device),
+                sta_tr_mask       = torch.from_numpy(sta_tr_m).to(device),
+                lengths           = torch.tensor([n_segs], device=device),
+                svara_idx         = torch.tensor([_PARAM_SVARA_IDX[svara_label]], device=device),
+                total_dur         = torch.tensor([total_dur], device=device),
+                residual_dists    = residual_dists,
+                rng               = rng,
+                dy0_required_init = dy0_init_t,
             )
         params = result["params"][0]  # (n_segs, 3)
         k_all, s_all, A_all = param_gruvae.decode_params(params)
         for i, seg in enumerate(segs):
             if seg["type"] in ("STAp", "STAt", "TRa", "TRd"):
-                seg_params[i] = (float(k_all[i]), float(s_all[i]), float(A_all[i]))
+                k_i = float(k_all[i])
+                s_i = float(s_all[i])
+                A_i = float(A_all[i])
+                # Cas A: ajust analític de A per a TR→SIL o TR al final
+                if i in m1_req_dict:
+                    A_i = solve_A_for_m1(k_i, s_i, m1_req_dict[i])
+                seg_params[i] = (k_i, s_i, A_i)
 
     else:
         # Fallback: sample independently from CurveModel Gaussian
         for i, seg in enumerate(segs):
             if seg["type"] in ("STAp", "STAt", "TRa", "TRd"):
                 gen = curve_model.generate(seg["type"], svara=svara_label, n=1, rng=rng)[0]
-                # Extract params from generated curve_fn by fitting isn't easy;
-                # use the CurveModel's sampled params directly
-                seg_params[i] = (gen["k"], gen["s"], gen["A"])
+                k_i, s_i, A_i = gen["k"], gen["s"], gen["A"]
+                if i in m1_req_dict:
+                    A_i = solve_A_for_m1(k_i, s_i, m1_req_dict[i])
+                seg_params[i] = (k_i, s_i, A_i)
 
-    # ── phase 4: render pitch curves ─────────────────────────────────────────
+    # ── phase 5: render pitch curves ─────────────────────────────────────────
+    # Each segment represents a half-open interval [t_start, t_start + dur).
+    # We drop the last sample of every segment except the final one to avoid
+    # duplicating the boundary value (linspace includes both endpoints, so
+    # curve[-1] == curve_next[0] without this drop).
     all_curves: list[np.ndarray] = []
+    n_segs_total = len(segs)
 
     for i, seg in enumerate(segs):
-        n = max(1, round(seg["dur_sec"] * SYNTH_SR))
+        n       = max(1, round(seg["dur_sec"] * SYNTH_SR))
+        is_last = (i == n_segs_total - 1)
 
         if seg["type"] == "SIL":
-            all_curves.append(np.full(n, np.nan))
+            curve = np.full(n, np.nan)
 
         elif seg["type"] == "CP":
-            all_curves.append(cp_curves[i])
+            curve = cp_curves[i]
 
         elif seg["type"] in ("STAp", "STAt", "TRa", "TRd"):
-            start    = seg["start_cents"]
-            end      = seg["end_cents"]
-            delta    = end - start
-            next_seg = segs[i + 1] if i + 1 < len(segs) else None
+            start = seg["start_cents"]
+            delta = seg["end_cents"] - start
             if i in seg_params and abs(delta) > 1e-6:
                 k, s, A = seg_params[i]
                 t    = np.linspace(0.0, 1.0, n)
                 norm = _param_curve_fn(t, k, s, A)
             else:
                 norm = np.linspace(0.0, 1.0, n)
-            all_curves.append(start + norm * delta)
+            curve = start + norm * delta
+
+        else:
+            curve = np.full(n, np.nan)
+
+        all_curves.append(curve if is_last else curve[:-1])
 
     pitch_cents = np.concatenate(all_curves) if all_curves else np.array([])
     return pitch_cents, segs
@@ -442,6 +563,12 @@ def main() -> None:
     tr_sil_stats            = load_tr_sil_stats()
     df_curves               = pl.read_parquet(STA_TR_FIT) if STA_TR_FIT.exists() else None
     rng                     = np.random.default_rng(42)
+    try:
+        boundary_sampler = load_boundary_sampler(curve_model)
+        print("[boundary] sampler loaded")
+    except Exception as e:
+        boundary_sampler = None
+        print(f"[boundary] sampler unavailable: {e}")
 
     if param_gruvae is None:
         print("[param_gru] no checkpoint found — falling back to CurveModel Gaussian sampling")
@@ -469,6 +596,7 @@ def main() -> None:
                 param_gruvae=param_gruvae,
                 residual_dists=res_dists,
                 df_curves=df_curves,
+                boundary_sampler=boundary_sampler,
             )
             seg_str = " ".join(s["type"] for s in segs)
             _plot_one(axes[r][c], pitch, segs, f"{svara} #{c+1} [{seg_str}]")
