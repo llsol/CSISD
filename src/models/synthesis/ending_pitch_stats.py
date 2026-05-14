@@ -37,7 +37,7 @@ from src.features.structural_embedding import (
     assign_segment_cents,
 )
 
-SYNTH_DIR        = S.DATA_INTERIM / "models" / "synthesis"
+SYNTH_DIR        = S.SYNTHESIS_DIR
 OUT_ENDING       = SYNTH_DIR / "ending_pitch_stats.parquet"
 OUT_TR_SIL_DELTA = SYNTH_DIR / "tr_sil_delta_stats.parquet"
 
@@ -55,7 +55,7 @@ def _extract_one_recording(
     tr_sil_records   : [{recording_id, svara_label, start_cents, end_cents, delta_cents}, ...]
     """
     corpus_root  = S.DATA_CORPUS
-    interim_root = S.DATA_INTERIM
+    interim_root = S.INTERIM_RECORDINGS
 
     df_pitch = load_preprocessed_pitch(
         recording_id=recording_id,

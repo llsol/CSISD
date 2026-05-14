@@ -58,7 +58,7 @@ from src.features.structural_embedding import (
     assign_segment_cents,
 )
 
-INTERIM_DIR = S.DATA_INTERIM / "analysis"
+INTERIM_DIR = S.INTERIM_ANALYSIS
 FIGURES_DIR = S.FIGURES_DIR / "analysis"
 PITCH_COL   = "f0_savgol_p3_w13_cents"
 
@@ -83,7 +83,7 @@ def _fit_parametric(t_norm: np.ndarray, p_norm: np.ndarray) -> tuple[float, floa
                     popt, _ = curve_fit(
                         _curve_model, t_norm, p_norm,
                         p0=[k0, s0, A0],
-                        bounds=([0.3, 0.01, -3.0], [50.0, 0.99, 3.0]),
+                        bounds=([0.3, 0.01, -0.4], [10.0, 0.99, 0.2]),
                         maxfev=2000,
                     )
                     rmse = float(np.sqrt(np.mean((_curve_model(t_norm, *popt) - p_norm) ** 2)))
@@ -121,7 +121,7 @@ def _extract_one_recording(
     Each dict contains full shape info (params for STA/TR, concavity for CP)
     plus position metadata needed for neighbour construction.
     """
-    interim = S.DATA_INTERIM
+    interim = S.INTERIM_RECORDINGS
     corpus  = S.DATA_CORPUS
 
     df_pitch = load_preprocessed_pitch(

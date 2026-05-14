@@ -12,6 +12,25 @@ DATA_PROCESSED = PROJECT_ROOT / "data" / "processed"
 
 FIGURES_DIR    = PROJECT_ROOT / "figures"
 
+INTERIM_RECORDINGS  = DATA_INTERIM / "recordings"
+INTERIM_PITCH_CV    = DATA_INTERIM / "pitch_predictions" / "cv"
+INTERIM_PITCH_SCMS  = DATA_INTERIM / "pitch_predictions" / "scms"
+INTERIM_SEP_CV_UNET = DATA_INTERIM / "source_separation" / "cv_unet"
+INTERIM_SEP_CV_AS   = DATA_INTERIM / "source_separation" / "cv_as"
+INTERIM_SEP_SCMS    = DATA_INTERIM / "source_separation" / "scms"
+INTERIM_ANALYSIS    = DATA_INTERIM / "analysis"
+INTERIM_MODELS      = DATA_INTERIM / "models"
+
+GRUVAE_VERSION       = "gruvae_v4"
+GRUVAE_DIR           = INTERIM_MODELS / GRUVAE_VERSION
+GRUVAE_CV_DIR        = INTERIM_MODELS / "gruvae_cv"
+CURVE_VAE_DIR        = INTERIM_MODELS / "curve_vae"
+PARAM_GRU_DIR        = INTERIM_MODELS / "param_gru"
+SYNTHESIS_DIR        = INTERIM_MODELS / "synthesis"
+SWIFTF0_SCRATCH_DIR  = INTERIM_MODELS / "swiftf0_scratch"
+SWIFTF0_CARNATIC_DIR = INTERIM_MODELS / "swiftf0_carnatic"
+SEP_UNET_DIR         = INTERIM_MODELS / "source_separation_unet"
+
 SSD_ROOT = Path("/media/lluis/Extreme SSD")
 SCMS_ROOT = DATA_CORPUS / "scms" 
 
@@ -105,7 +124,7 @@ DEFAULT_CONTEXT_N = 1   # svara neighborhood context for plots
 # Common paths derived from CURRENT_PIECE
 
 PREPROCESSED_PITCH_PATH = (
-    DATA_INTERIM
+    INTERIM_RECORDINGS
     / CURRENT_PIECE
     / "pitch"
     / f"{CURRENT_PIECE}_pitch_preprocessed.parquet"

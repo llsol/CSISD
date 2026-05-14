@@ -45,14 +45,14 @@ HOP_LENGTH   = 256
 PATCH_FRAMES = 128
 BASE         = 32
 
-SEP_DIR = S.DATA_INTERIM / "source_separation"
+SEP_DIR = S.SEP_UNET_DIR
 
 def _default_checkpoint() -> Path:
     runs = sorted(SEP_DIR.glob("run_*"))
     if runs:
         return runs[-1] / "best.pt"
     return SEP_DIR / "checkpoint_best.pt"   # legacy fallback
-OUT_ROOT           = S.DATA_INTERIM / "source_separation" / "separated"
+OUT_ROOT           = S.INTERIM_SEP_CV_UNET
 
 
 def _find_audio(recording_id: str) -> Path:

@@ -37,7 +37,7 @@ from src.features.structural_embedding import (
     assign_segment_cents,
 )
 
-DEFAULT_OUT = S.DATA_INTERIM / "models" / "curve_vae" / "gt_curves.parquet"
+DEFAULT_OUT = S.CURVE_VAE_DIR / "gt_curves.parquet"
 MIN_SAMPLES = 6   # discard segments shorter than this
 
 
@@ -50,7 +50,7 @@ def extract_one_recording(
     seg_types: tuple[str, ...] = ("STAp", "STAt", "TRa", "TRd"),
 ) -> list[dict]:
     """Extract all STA/TR normalized curves for one recording."""
-    interim_root = Path("data/interim")
+    interim_root = S.INTERIM_RECORDINGS
     corpus_root  = Path("data/corpus")
 
     df_pitch = load_preprocessed_pitch(

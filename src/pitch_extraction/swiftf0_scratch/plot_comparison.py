@@ -36,7 +36,7 @@ from src.pitch_extraction.swiftf0_scratch.evaluate_scms import (
 from src.pitch_extraction.swiftf0_scratch.model import SR as SR_SC, HOP as HOP_SC
 
 SCMS_ROOT  = settings.PROJECT_ROOT / "data" / "datasets" / "scms"
-PITCH_ROOT = settings.DATA_INTERIM / "scms_pitch_ftanet"
+PITCH_ROOT = settings.INTERIM_PITCH_SCMS / "ftanet"
 OUT_BASE   = settings.FIGURES_DIR / "swiftf0_scratch" / "evaluation"
 
 METRICS    = ["Voicing Recall", "Voicing False Alarm",

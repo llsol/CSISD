@@ -55,7 +55,7 @@ VOICING_WEIGHT = 1.0    # relative weight of voicing BCE vs pitch CE
 SEED           = 42
 # ─────────────────────────────────────────────────────────────────────────────
 
-CKPT_DIR = settings.DATA_INTERIM / "models" / "swiftf0_carnatic"
+CKPT_DIR = settings.SWIFTF0_CARNATIC_DIR
 
 
 def hz_to_bin(f0_hz: torch.Tensor, bin_centers: torch.Tensor) -> torch.Tensor:

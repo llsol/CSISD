@@ -59,7 +59,7 @@ ALPHA = 0.5   # equal weight: both sources are peak-normalised before mixing
 CLEAN_SUBDIR     = "Audio-Multitracks-Clean"
 CONCERT          = None    # None = all concerts on SSD
 USE_PITCH_SHIFT  = True    # set False to bypass pitch augmentation entirely
-OUT_DIR          = settings.DATA_INTERIM / "source_separation"
+OUT_DIR          = settings.SEP_UNET_DIR
 
 # Tonic filter: only use pieces whose detected tonic falls in [TONIC_MIN, TONIC_MAX].
 # Shift range normalises each piece toward the midpoint, keeping artefacts minimal.

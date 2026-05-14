@@ -53,7 +53,7 @@ from src.analysis.svara_segment_analysis import load_all, SCALE_ORDER
 
 import torch
 
-CKPT_DIR = settings.DATA_INTERIM / "models" / "gruvae_v4"
+CKPT_DIR = settings.GRUVAE_DIR
 
 SCALE_ORDER_PRESENT = [s for s in SCALE_ORDER if s in set(SVARA_LABELS)]
 
@@ -68,10 +68,10 @@ TYPE_IDX = {t: i for i, t in enumerate(TYPE_ORD)}
 VALID_NEXT: dict[str, set[str]] = {
     "CP":   {"SIL", "STAp", "STAt", "TRa", "TRd"},
     "SIL":  {"CP", "STAp", "STAt", "TRa", "TRd"},
-    "STAp": {"TRd", "SIL"},
-    "STAt": {"TRa", "SIL"},
-    "TRa":  {"CP", "STAp"},
-    "TRd":  {"CP", "STAt"},
+    "STAp": {"STAp", "STAt", "TRa", "TRd"},
+    "STAt": {"STAp", "STAt", "TRa", "TRd"},
+    "TRa":  {"CP", "SIL"},
+    "TRd":  {"CP", "SIL"},
 }
 
 # ── feature definitions ───────────────────────────────────────────────────────
@@ -100,7 +100,7 @@ FEATURES = [
 
 def _feats_from_sample(sv_data: dict) -> dict:
     segs      = sv_data["segments"]
-    total_rel = sum(s["dur_rel"] for s in segs) or 1.0
+    total_abs = sum(s["dur_abs_sec"] for s in segs) or 1.0
 
     cp_segs   = [s for s in segs if s["type"] == "CP"]
     stap_segs = [s for s in segs if s["type"] == "STAp"]
@@ -112,7 +112,7 @@ def _feats_from_sample(sv_data: dict) -> dict:
     tr_segs   = tra_segs + trd_segs
 
     def _frac(sub):
-        return sum(s["dur_rel"] for s in sub) / total_rel
+        return sum(s["dur_abs_sec"] for s in sub) / total_abs
 
     cp_cents   = [s["cents"] for s in cp_segs   if s["cents"] != 0.0]
     stap_cents = [s["cents"] for s in stap_segs if s["cents"] != 0.0]
@@ -164,7 +164,7 @@ def load_gt_data(
             types = [TYPE_ORD[int(np.argmax(row[:4]))] for row in seq]
             gt_seqs[sv].append(types)
             if len(seq) > 0:
-                gt_durs[sv].append(float(seq[0, 5]))   # col 5 = total_dur_sec
+                gt_durs[sv].append(float(seq[:, 6].sum()))  # sum dur_abs_sec = total svara dur
 
     return gt_rows, gt_seqs, gt_durs
 
@@ -729,7 +729,7 @@ def main() -> None:
         samples = generate(model, sv, args.n, device,
                            use_hard_mask=args.hard_mask,
                            length_noise=args.length_noise,
-                           total_dur_sec=sampled_durs)
+                           )
         for sv_data in samples:
             feat = _feats_from_sample(sv_data)
             gen_seqs[sv].append(feat.pop("_type_seq"))

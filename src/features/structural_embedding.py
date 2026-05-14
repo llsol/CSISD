@@ -29,7 +29,7 @@ def structural_embedding_one_recording(
     recording_id: str,
     tonic_hz: float,
     corpus_root: Path | str = "data/corpus",
-    interim_root: Path | str = "data/interim",
+    interim_root: Path | str | None = None,
     annotation_path: Path | str | None = None,
     out_path: Path | None = None,
     max_segments: int = 12,
@@ -49,8 +49,9 @@ def structural_embedding_one_recording(
         - embedding (list[float])
     """
 
-    corpus_root = Path(corpus_root)
-    interim_root = Path(interim_root)
+    import settings as _S
+    corpus_root  = Path(corpus_root)
+    interim_root = _S.INTERIM_RECORDINGS if interim_root is None else Path(interim_root)
 
     # ------------------------------------------------------------
     # 1) Load preprocessed pitch and convert to cents
@@ -121,8 +122,7 @@ def structural_embedding_one_recording(
     # ------------------------------------------------------------
     if out_path is None:
         out_path = Path(
-            f"data/interim/{recording_id}/features/"
-            f"{recording_id}_svara_structural_embeddings.parquet"
+            f"{_S.INTERIM_RECORDINGS}/{recording_id}/features/{recording_id}_svara_structural_embeddings.parquet"
         )
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -136,7 +136,7 @@ def structural_embedding_all_recordings(
     tonic_map: dict[str, float],
     recording_ids: list[str] = SARASUDA_VARNAM,
     corpus_root: Path | str = "data/corpus",
-    interim_root: Path | str = "data/interim",
+    interim_root: Path | str | None = None,
     max_segments: int = 12,
     tau_init_sil: float = 0.30,
 ):
@@ -381,20 +381,80 @@ def build_segments_for_one_svara(
             i += 1
 
         if peak_pos >= 0:
-            _, peak_kind = local_peak_map[peak_pos]
-            seg_type = "STAp" if peak_kind == "max" else "STAt"
-        else:
+            # Degrade to TR if the peak is immediately followed by CP or SIL:
+            # no descending/ascending arc exists after the peak.
+            if i < N and labels[i] in ("CP", "SIL"):
+                peak_pos = -1
+            else:
+                _, peak_kind = local_peak_map[peak_pos]
+                seg_type = "STAp" if peak_kind == "max" else "STAt"
+
+        if peak_pos < 0:
             # TR: determine direction from start/end cents values
             seg_cents = cents[start:i]
             finite = seg_cents[np.isfinite(seg_cents)]
             if len(finite) >= 2 and finite[-1] != finite[0]:
                 seg_type = "TRa" if finite[-1] > finite[0] else "TRd"
             else:
-                seg_type = "TRa"  # fallback
+                # Too few samples to determine direction: infer from previous segment.
+                # After STAp (local max) expect descent → TRd; after STAt → TRa.
+                prev_type = segments[-1]["type"] if segments else None
+                if prev_type == "STAp":
+                    seg_type = "TRd"
+                elif prev_type == "STAt":
+                    seg_type = "TRa"
+                else:
+                    seg_type = "TRa"
 
         segments.append({"type": seg_type, "start": start, "end": i})
 
+    segments = _absorb_short_tr_into_next(segments)
+    return _degrade_sta_before_boundary(segments)
+
+
+def _degrade_sta_before_boundary(segments: list[dict]) -> list[dict]:
+    """
+    Convert any STAp/STAt that is immediately followed by CP or SIL into a TR.
+
+    Direction inferred from peak kind:
+      STAp (ended at local max, was ascending) → TRa
+      STAt (ended at local min, was descending) → TRd
+    """
+    _sta_to_tr = {"STAp": "TRa", "STAt": "TRd"}
+    for i, seg in enumerate(segments):
+        if seg["type"] not in _sta_to_tr:
+            continue
+        nxt = segments[i + 1] if i + 1 < len(segments) else None
+        if nxt is not None and nxt["type"] in ("CP", "SIL"):
+            seg["type"] = _sta_to_tr[seg["type"]]
     return segments
+
+
+def _absorb_short_tr_into_next(
+    segments: list[dict],
+    min_samples: int = 3,
+) -> list[dict]:
+    """
+    Absorb a short TR segment (< min_samples) into the following CP or SIL.
+    Removes boundary artifacts between STA peaks and stable regions.
+    """
+    out: list[dict] = []
+    i = 0
+    while i < len(segments):
+        seg = segments[i]
+        is_short_tr = (
+            seg["type"] in ("TRa", "TRd")
+            and (seg["end"] - seg["start"]) < min_samples
+        )
+        if is_short_tr and i + 1 < len(segments):
+            nxt = segments[i + 1]
+            if nxt["type"] in ("CP", "SIL"):
+                nxt["start"] = seg["start"]   # extend next segment backwards
+                i += 1
+                continue                       # skip this TR
+        out.append(seg)
+        i += 1
+    return out
 
 
 
@@ -454,11 +514,12 @@ def encode_segments(
         [total_duration, s_1, s_2, ..., s_K, padding]
 
     Segment format:
-        [onehot_CP, onehot_SIL, onehot_STAp, onehot_STAt, onehot_TRa, onehot_TRd, duration_rel, cents]
+        [onehot_CP, onehot_SIL, onehot_STAp, onehot_STAt, onehot_TRa, onehot_TRd, dur_rel, dur_abs_sec, cents]
     """
 
     times = df_svara["time_rel_sec"].to_numpy()
-    total_duration = float(times[-1] - times[0]) if len(times) > 1 else 0.0
+    dt = float(times[1] - times[0]) if len(times) > 1 else 0.01
+    total_duration = float(times[-1] - times[0] + dt) if len(times) > 1 else 0.0
 
     vec = [total_duration]
 
@@ -469,7 +530,8 @@ def encode_segments(
         e = seg["end"]
 
         if e > s:
-            dur_sec = float(times[e - 1] - times[s])
+            end_time = float(times[e]) if e < len(times) else float(times[-1] + dt)
+            dur_sec = end_time - float(times[s])
         else:
             dur_sec = 0.0
 
@@ -477,10 +539,10 @@ def encode_segments(
 
         vec.extend(
             TYPE_TO_ONEHOT[seg["type"]] +
-            [dur_rel, float(seg["cents"])]
+            [dur_rel, dur_sec, float(seg["cents"])]
         )
 
-    dim_per_seg = 8   # 6 onehot + dur_rel + cents
+    dim_per_seg = 9   # 6 onehot + dur_rel + dur_abs_sec + cents
     n_pad = max_segments - len(used_segments)
     vec.extend([0.0] * (n_pad * dim_per_seg))
 

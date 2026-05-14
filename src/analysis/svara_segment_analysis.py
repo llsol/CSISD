@@ -56,12 +56,12 @@ def load_recording(recording_id: str):
 
     df_pitch = load_preprocessed_pitch(
         recording_id=recording_id,
-        root_dir=S.DATA_INTERIM,
+        root_dir=S.INTERIM_RECORDINGS,
         tonic_hz=tonic_hz,
         convert_to_cents=True,
     )
-    df_flat  = load_flat_regions(recording_id=recording_id, root_dir=S.DATA_INTERIM)
-    df_peaks = load_peaks(recording_id=recording_id, root_dir=S.DATA_INTERIM)
+    df_flat  = load_flat_regions(recording_id=recording_id, root_dir=S.INTERIM_RECORDINGS)
+    df_peaks = load_peaks(recording_id=recording_id, root_dir=S.INTERIM_RECORDINGS)
 
     df_pitch = (
         df_pitch

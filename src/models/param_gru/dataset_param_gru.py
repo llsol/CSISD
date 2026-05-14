@@ -43,10 +43,10 @@ _N_TYPES    = 6
 
 # ── normalization constants (match model_param_gru.py) ───────────────────────
 
-K_MIN, K_MAX   = 0.3, 50.0
+K_MIN, K_MAX   = 0.3, 10.0
 S_MIN, S_MAX   = 0.01, 0.99
-A_SCALE        = 3.0        # A_osc in [-3, 3]
-LOG_K_SCALE    = math.log(K_MAX)           # ≈ 3.91
+A_SCALE        = 0.4        # A_osc in [-0.4, 0.2]; scale by max(|A_MIN|, A_MAX)
+LOG_K_SCALE    = math.log(K_MAX)           # ≈ 2.30
 LOGIT_S_SCALE  = 5.0                       # logit([0.01,0.99]) ≈ [-4.6, 4.6]
 SLOPE_SCALE    = 300.0                     # ¢/s; tanh squash
 
@@ -57,7 +57,7 @@ OUTPUT_DIM     = 3   # log_k_raw, logit_s_raw, A_raw
 # Svara labels (alphabetical, matches gruvae)
 from src.models.gruvae.dataset_gruvae import SVARA_TO_IDX, SVARA_LABELS  # noqa: E402
 
-SHAPES_PATH = S.DATA_INTERIM / "analysis" / "segment_shapes.parquet"
+SHAPES_PATH = S.INTERIM_ANALYSIS / "segment_shapes.parquet"
 
 
 # ── boundary slope helpers ────────────────────────────────────────────────────
@@ -171,9 +171,16 @@ def _build_sequence(rows: list[dict], total_dur: float, svara_idx: int) -> dict 
         dur_sec_arr[i]    = r["dur_sec"]
         delta_cents_arr[i] = delta
 
-        # slope_prev for this step = slope_end of previous step
+        # slope_prev for this step = slope_end of previous step.
+        # Reset to 0 after CP/SIL to match inference behaviour (slope_prev
+        # is reset to 0 in ParamGRU.generate() for non-STA/TR steps).
         if i > 0:
-            slope_prev_gt[i] = slope_ends[i - 1]
+            prev_type = rows[i - 1]["seg_type"]
+            slope_prev_gt[i] = (
+                slope_ends[i - 1]
+                if prev_type in ("STAp", "STAt", "TRa", "TRd")
+                else 0.0
+            )
 
         # target
         if has_params:

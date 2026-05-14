@@ -2,7 +2,9 @@ import polars as pl
 import pandas as pd
 from pathlib import Path
 import numpy as np
+import settings as _S
 from settings import PROJECT_ROOT
+_RECORDINGS = _S.INTERIM_RECORDINGS
 
 
 
@@ -15,13 +17,14 @@ def _resolve_path(p: Path | str) -> Path:
 
 
 def _recording_path(
-        root_dir: Path | str,
+        root_dir: Path | str | None,
         recording_id: str,
         subdir: str,
         filename: str,
 ) -> Path:
     """Return the canonical path for a per-recording file."""
-    return _resolve_path(root_dir) / recording_id / subdir / filename
+    base = _RECORDINGS if root_dir is None else _resolve_path(root_dir)
+    return base / recording_id / subdir / filename
 
 
 
@@ -122,7 +125,7 @@ def save_pitch_file(
 
 def load_preprocessed_pitch(
         recording_id: str,
-        root_dir: Path | str = "data/interim",
+        root_dir: Path | str | None = None,
         tonic_hz: float = None,
         convert_to_cents: bool = True
 ):
@@ -170,7 +173,7 @@ def load_preprocessed_pitch(
 def save_preprocessed_pitch(
         df: pl.DataFrame,
         recording_id: str,
-        root_dir: Path | str = "data/interim",
+        root_dir: Path | str | None = None,
         debug: bool = False,
         create_tsv: bool = False
 ) -> Path:
@@ -236,7 +239,7 @@ def save_preprocessed_pitch(
 def save_flat_regions(
         df: pl.DataFrame,
         recording_id: str,
-        root_dir: Path | str = "data/interim",
+        root_dir: Path | str | None = None,
 ):
     """
     Save pitch + flat_region for plotting / inspection.
@@ -273,7 +276,7 @@ def save_flat_regions(
 
 def load_flat_regions(
         recording_id: str,
-        root_dir: Path | str = "data/interim",
+        root_dir: Path | str | None = None,
 ) -> pl.DataFrame:
     """
     Load data/interim/<recording_id>/flat_regions/<recording_id>_flat_regions.parquet
@@ -294,7 +297,7 @@ def load_flat_regions(
 def save_peaks(
     df_peaks: pl.DataFrame,
     recording_id: str,
-    root_dir: Path | str = "data/interim",
+    root_dir: Path | str | None = None,
 ) -> Path:
     """
     data/interim/<recording_id>/peaks/<recording_id>_peaks.parquet
@@ -312,7 +315,7 @@ def save_peaks(
 
 def load_peaks(
     recording_id: str,
-    root_dir: Path | str = "data/interim",
+    root_dir: Path | str | None = None,
 ) -> pl.DataFrame:
     """
     Load data/interim/<recording_id>/peaks/<recording_id>_peaks.parquet

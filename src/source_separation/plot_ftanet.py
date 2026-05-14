@@ -47,7 +47,7 @@ SOURCE_LABELS = {
 
 
 def plot_pitch(recording_id: str, source: str):
-    pitch_dir = settings.DATA_INTERIM / recording_id / "pitch_raw"
+    pitch_dir = settings.INTERIM_RECORDINGS / recording_id / "pitch_raw"
     suffix    = "ftanet" if source == "original" else f"{source}_ftanet"
     npy_path  = pitch_dir / f"{recording_id}_{suffix}_raw.npy"
 

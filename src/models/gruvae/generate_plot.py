@@ -37,7 +37,7 @@ import settings
 from src.models.gruvae.dataset_gruvae import SVARA_LABELS, SVARA_TO_IDX
 from src.models.gruvae.model_gruvae import ModelConfig, SvaraGRUVAE
 
-CKPT_DIR   = settings.DATA_INTERIM / "models" / "gruvae_v4"
+CKPT_DIR   = settings.GRUVAE_DIR
 TYPE_NAMES = ["CP", "SIL", "STAp", "STAt", "TRa", "TRd"]
 COLOR      = {"CP": "#4caf50", "SIL": "#9e9e9e", "STAp": "#ff9800", "STAt": "#e65100",
               "TRa": "#2196f3", "TRd": "#0277bd"}
@@ -72,23 +72,16 @@ def generate(
     svara_label:    str,
     n:              int,
     device:         torch.device,
-    use_hard_mask:  bool                      = False,
-    length_noise:   float                     = 0.0,
-    total_dur_sec:  float | list | None       = None,
+    use_hard_mask:  bool  = False,
+    length_noise:   float = 0.0,
 ) -> list[dict]:
     idx_t = torch.tensor(
         [SVARA_TO_IDX[svara_label]] * n, dtype=torch.long, device=device
     )
-    if total_dur_sec is None:
-        dur_t = None
-    elif isinstance(total_dur_sec, (int, float)):
-        dur_t = torch.full((n,), float(total_dur_sec), dtype=torch.float32, device=device)
-    else:
-        dur_t = torch.tensor(list(total_dur_sec), dtype=torch.float32, device=device)
     with torch.no_grad():
-        out      = model.generate(batch_size=n, svara_idx=idx_t, device=device,
-                                  total_dur=dur_t, use_hard_mask=use_hard_mask)
-    gen       = out["generated"]         # (n, max_len, 8): [CP, SIL, STAp, STAt, TRa, TRd, dur_rel, cents_norm]
+        out = model.generate(batch_size=n, svara_idx=idx_t, device=device,
+                             use_hard_mask=use_hard_mask)
+    gen       = out["generated"]         # (n, max_len, 8): [CP, SIL, STAp, STAt, TRa, TRd, dur_abs_sec, cents_norm]
     pred_lens = out["pred_length"].float().cpu()  # (n,)
 
     results = []
@@ -106,9 +99,9 @@ def generate(
             typ = TYPE_NAMES[int(np.argmax(s[:type_dim]))]
             cents = 0.0 if typ in ("SIL", "TRa", "TRd") else float(s[type_dim + 1]) * 1200.0
             segments.append({
-                "type":    typ,
-                "dur_rel": float(s[type_dim]),
-                "cents":   cents,
+                "type":        typ,
+                "dur_abs_sec": float(s[type_dim]),
+                "cents":       cents,
             })
         results.append({"svara": svara_label, "segments": segments})
     return results
@@ -120,11 +113,11 @@ def plot_svara(ax: plt.Axes, data: dict, title: str = "") -> None:
     segs      = data["segments"]
     svara     = data["svara"]
     n_segs    = len(segs)
-    total_rel = sum(s["dur_rel"] for s in segs) or 1.0
+    total_abs = sum(s["dur_abs_sec"] for s in segs) or 1.0
 
     x = 0.0
     for seg in segs:
-        w     = seg["dur_rel"] / total_rel
+        w     = seg["dur_abs_sec"] / total_abs
         cents = seg["cents"]
         typ   = seg["type"]
 
@@ -159,7 +152,7 @@ def plot_svara(ax: plt.Axes, data: dict, title: str = "") -> None:
         )
         ax.text(
             x + w / 2, text_y - BOX_H * 0.52,
-            f"{seg['dur_rel'] * 100:.1f}%",
+            f"{seg['dur_abs_sec']:.2f}s",
             ha="center", va="top",
             fontsize=6, color="black",
         )
@@ -179,7 +172,7 @@ def plot_svara(ax: plt.Axes, data: dict, title: str = "") -> None:
     ax.tick_params(axis="x", bottom=False, labelbottom=False)
     ax.tick_params(axis="y", labelsize=7)
 
-    dur_str = f"Σdur_rel={total_rel:.2f}  n_segs={n_segs}"
+    dur_str = f"Σdur={total_abs:.2f}s  n_segs={n_segs}"
     ax.set_title(
         title or f"Svara {svara}  ({n_segs} segs)  {dur_str}",
         fontsize=8,
@@ -204,9 +197,6 @@ def main() -> None:
                         help="Output PNG path (default: data/interim/gruvae_generated.png)")
     parser.add_argument("--hard-mask", action="store_true",
                         help="Enforce musical grammar during generation (type transition mask)")
-    parser.add_argument("--dur", type=float, default=None,
-                        help="Total svara duration in seconds used as conditioning "
-                             "(default: None → model uses zero/unconditioned)")
     args = parser.parse_args()
 
     device   = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -230,7 +220,7 @@ def main() -> None:
 
     for r, svara in enumerate(svaras):
         samples = generate(model, svara, args.n, device,
-                           use_hard_mask=args.hard_mask, total_dur_sec=args.dur)
+                           use_hard_mask=args.hard_mask)
         for c, sv_data in enumerate(samples):
             plot_svara(axes[r][c], sv_data, title=f"{svara} #{c + 1}")
 

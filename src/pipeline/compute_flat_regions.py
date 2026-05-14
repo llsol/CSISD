@@ -10,7 +10,7 @@ def run_flat_regions(recording_id: str):
 
     df = load_preprocessed_pitch(
         recording_id=recording_id,
-        root_dir=S.DATA_INTERIM,
+        root_dir=S.INTERIM_RECORDINGS,
         tonic_hz=tonic_hz,
         convert_to_cents=True,
     )
@@ -39,7 +39,7 @@ def run_flat_regions(recording_id: str):
 
     df = add_flat_id(df, flat_col="flat_region", out_col="flat_id")
 
-    out_path = save_flat_regions(df, recording_id=recording_id, root_dir=S.DATA_INTERIM)
+    out_path = save_flat_regions(df, recording_id=recording_id, root_dir=S.INTERIM_RECORDINGS)
     return out_path
 
 

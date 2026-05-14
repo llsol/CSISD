@@ -54,11 +54,11 @@ THRESHOLDS_SWEEP = [0.3, 0.4, 0.5, 0.6, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 0.99]
 def load_model(model_type: str, run_dir: Path | None, device: torch.device):
     if model_type == "finetune":
         from src.pitch_extraction.swiftf0_finetune.model import SwiftF0
-        ckpt_dir = settings.DATA_INTERIM / "models" / "swiftf0_carnatic"
+        ckpt_dir = settings.SWIFTF0_CARNATIC_DIR
         Model = SwiftF0
     else:
         from src.pitch_extraction.swiftf0_scratch.model import SwiftF0Scratch
-        ckpt_dir = settings.DATA_INTERIM / "models" / "swiftf0_scratch"
+        ckpt_dir = settings.SWIFTF0_SCRATCH_DIR
         Model = SwiftF0Scratch
 
     if run_dir is None:
@@ -186,10 +186,10 @@ def main():
 
     if args.model == "finetune":
         from src.pitch_extraction.swiftf0_finetune.model import SR, HOP
-        ckpt_dir = settings.DATA_INTERIM / "models" / "swiftf0_carnatic"
+        ckpt_dir = settings.SWIFTF0_CARNATIC_DIR
     else:
         from src.pitch_extraction.swiftf0_scratch.model import SR, HOP
-        ckpt_dir = settings.DATA_INTERIM / "models" / "swiftf0_scratch"
+        ckpt_dir = settings.SWIFTF0_SCRATCH_DIR
 
     run_dir = (ckpt_dir / args.run) if args.run else None
     model   = load_model(args.model, run_dir, device)

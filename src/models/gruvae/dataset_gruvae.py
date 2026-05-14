@@ -1,17 +1,16 @@
 """
 GRU+VAE dataset builder.
 
-Converts annotated svaras into variable-length sequences of shape (n_segments, 7)
+Converts annotated svaras into variable-length sequences of shape (n_segments, 8)
 for training the GRU+VAE model.
 
-Segment vector format  (INPUT_DIM = 9):
-    [onehot_CP, onehot_SIL, onehot_STAp, onehot_STAt, onehot_TRa, onehot_TRd, dur_rel, total_dur_sec, cents_norm]
+Segment vector format  (INPUT_DIM = 8):
+    [onehot_CP, onehot_SIL, onehot_STAp, onehot_STAt, onehot_TRa, onehot_TRd, dur_abs_sec, cents_norm]
 
-    onehot_*      : type encoding — CP=[1,0,0,0,0,0]  SIL=[0,1,0,0,0,0]  STAp=[0,0,1,0,0,0]
-                                    STAt=[0,0,0,1,0,0]  TRa=[0,0,0,0,1,0]  TRd=[0,0,0,0,0,1]
-    dur_rel       : segment_duration / svara_total_duration  (sum ~1 per svara)
-    total_dur_sec : svara duration in seconds  (same value repeated every row)
-    cents_norm    : cents_rel_tonic / 1200     (0 = tonic, 1 = octave)
+    onehot_*    : type encoding — CP=[1,0,0,0,0,0]  SIL=[0,1,0,0,0,0]  STAp=[0,0,1,0,0,0]
+                                  STAt=[0,0,0,1,0,0]  TRa=[0,0,0,0,1,0]  TRd=[0,0,0,0,0,1]
+    dur_abs_sec : absolute segment duration in seconds  (sum = svara total duration)
+    cents_norm  : cents_rel_tonic / 1200     (0 = tonic, 1 = octave)
 
 Pitch assignment per segment type (delegates to assign_segment_cents):
     CP   -> median of the flat region
@@ -42,7 +41,7 @@ from src.features.structural_embedding import (
     assign_segment_cents,
 )
 
-INPUT_DIM = 9
+INPUT_DIM = 8
 
 SVARA_LABELS = sorted(['D', 'G', 'M', 'N', 'P', 'R', 'S'])
 SVARA_TO_IDX = {label: i for i, label in enumerate(SVARA_LABELS)}
@@ -60,33 +59,25 @@ def segments_to_sequence(
     Convert a list of segment dicts into a (n_segments, INPUT_DIM) array.
 
     Each row:
-        [onehot_CP, onehot_SIL, onehot_STAp, onehot_STAt, onehot_TRa, onehot_TRd, dur_rel, total_dur_sec, cents_norm]
+        [onehot_CP, onehot_SIL, onehot_STAp, onehot_STAt, onehot_TRa, onehot_TRd, dur_abs_sec, cents_norm]
     """
     times = df_svara["time_rel_sec"].to_numpy()
     N = len(times)
 
-    # Sample interval (used to extend the last segment to its true end boundary)
     dt = float(times[1] - times[0]) if N > 1 else 0.01
-
-    # total_dur includes the full duration of the last sample (exclusive-end convention),
-    # so that sum(dur_sec over all segments) == total_dur exactly.
-    total_dur = float(times[-1] - times[0] + dt) if N > 1 else 0.0
 
     rows = []
     for seg in segments:
         s = seg["start"]
         e = seg["end"]
 
-        # Exclusive-end boundary: start of the sample just after this segment.
-        # This ensures t0 in the plot reconstructs to exactly times[s].
         end_time = float(times[e]) if e < N else float(times[N - 1] + dt)
-        dur_sec = end_time - float(times[s]) if e > s else 0.0
-        dur_rel = dur_sec / total_dur if total_dur > 0.0 else 0.0
+        dur_abs_sec = end_time - float(times[s]) if e > s else 0.0
 
         cents = seg.get("cents", np.nan)
         cents_norm = float(cents) / 1200.0 if np.isfinite(cents) else 0.0
 
-        vec = TYPE_TO_ONEHOT[seg["type"]] + [dur_rel, total_dur, cents_norm]
+        vec = TYPE_TO_ONEHOT[seg["type"]] + [dur_abs_sec, cents_norm]
         rows.append(vec)
 
     return np.array(rows, dtype=np.float32)  # (n_segments, INPUT_DIM)
@@ -100,7 +91,7 @@ def build_svara_sequences(
     recording_id: str,
     tonic_hz: float,
     corpus_root: Path | str = "data/corpus",
-    interim_root: Path | str = "data/interim",
+    interim_root: Path | str | None = None,
     annotation_path: Path | str | None = None,
     tau_init_sil: float = 0.30,
 ) -> list[dict]:
@@ -118,7 +109,8 @@ def build_svara_sequences(
         }
     """
     corpus_root = Path(corpus_root)
-    interim_root = Path(interim_root)
+    import settings as _S
+    interim_root = _S.INTERIM_RECORDINGS if interim_root is None else Path(interim_root)
 
     # Load data
     df_pitch = load_preprocessed_pitch(
@@ -194,7 +186,7 @@ def build_corpus_sequences(
     tonic_map: dict[str, float] = S.SARASUDA_TONICS,
     recording_ids: list[str] = S.SARASUDA_VARNAM,
     corpus_root: Path | str = "data/corpus",
-    interim_root: Path | str = "data/interim",
+    interim_root: Path | str | None = None,
     tau_init_sil: float = 0.30,
 ) -> list[dict]:
     """
@@ -277,7 +269,7 @@ class SvaraDataset(Dataset):
         recording_ids: list[str] | None = None,
         tonic_map: dict[str, float] | None = None,
         corpus_root: Path | str = "data/corpus",
-        interim_root: Path | str = "data/interim",
+        interim_root: Path | str | None = None,
         feature_cols: list[int] | None = None,
         tau_init_sil: float = 0.30,
     ):
@@ -307,19 +299,18 @@ class SvaraDataset(Dataset):
     def __len__(self) -> int:
         return len(self._sequences)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int, int, float]:
-        seq = self._sequences[idx]                      # (n_segments, INPUT_DIM=7) raw
-        total_dur_sec = float(seq[0, 7])                # col 7 = total_dur_sec (same for all rows)
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int, int]:
+        seq = self._sequences[idx]                      # (n_segments, INPUT_DIM=8)
         if self.feature_cols is not None:
-            seq = seq[:, self.feature_cols]             # (n_segments, n_feats)
+            seq = seq[:, self.feature_cols]
         svara_idx = SVARA_TO_IDX.get(self._svara_labels[idx], 0)
-        return torch.from_numpy(seq), seq.shape[0], svara_idx, total_dur_sec
+        return torch.from_numpy(seq), seq.shape[0], svara_idx
 
 
 def collate_svara_batch(
-    batch: list[tuple[torch.Tensor, int, int, float]],
+    batch: list[tuple[torch.Tensor, int, int]],
     max_len: int | None = None,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Collate function for DataLoader.
 
@@ -328,12 +319,10 @@ def collate_svara_batch(
     padded     : (batch, max_len, n_feats)  float32
     lengths    : (batch,)                   int64
     svara_idxs : (batch,)                   int64
-    total_durs : (batch,)                   float32  — total_dur_sec per svara
     """
-    seqs, lengths, svara_idxs, total_durs = zip(*batch)
+    seqs, lengths, svara_idxs = zip(*batch)
     lengths_t    = torch.tensor(lengths,    dtype=torch.long)
     svara_idxs_t = torch.tensor(svara_idxs, dtype=torch.long)
-    total_durs_t = torch.tensor(total_durs, dtype=torch.float32)
 
     if max_len is None:
         max_len = int(lengths_t.max().item())
@@ -343,7 +332,7 @@ def collate_svara_batch(
     for i, (seq, length) in enumerate(zip(seqs, lengths)):
         padded[i, :length] = seq[:length]
 
-    return padded, lengths_t, svara_idxs_t, total_durs_t
+    return padded, lengths_t, svara_idxs_t
 
 
 def build_dataloader(
@@ -354,7 +343,7 @@ def build_dataloader(
     shuffle: bool = True,
     max_len: int | None = None,
     corpus_root: Path | str = "data/corpus",
-    interim_root: Path | str = "data/interim",
+    interim_root: Path | str | None = None,
 ) -> DataLoader:
     """
     Build a DataLoader for one or all recordings.

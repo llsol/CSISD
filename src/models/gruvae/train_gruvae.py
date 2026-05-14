@@ -40,6 +40,7 @@ from src.models.gruvae.model_gruvae import (
 # ============================================================
 
 RECORDING_IDS  = None    # None → all S.SARASUDA_VARNAM; or e.g. ["srs_v1_bdn_sav"]
+CV_CHECKPOINT_DIR = S.GRUVAE_CV_DIR
 EPOCHS         = 800
 BATCH_SIZE     = 32
 LR             = 5e-4
@@ -47,32 +48,40 @@ WARMUP_STEPS   = 8000
 VAL_FRACTION   = 0.15
 SAVE_EVERY     = 10
 SEED           = 42
-CHECKPOINT_DIR = Path("data/interim/models/gruvae_v4")
+CHECKPOINT_DIR = S.GRUVAE_DIR
+
+# Teacher forcing schedule: linear decay from TF_START to 0 over TF_DECAY epochs
+TF_START = 0.5
+TF_DECAY = 200   # epoch at which tf_ratio reaches 0
 
 MODEL_CFG = ModelConfig(
-    hidden_dim   = 32,   # reduced capacity → decoder can't reconstruct without z
-    latent_dim   = 32,
-    num_layers   = 1,    # 1 layer: simpler decoder, less able to memorize
-    dropout      = 0.0,  # no dropout with 1 layer (PyTorch ignores it anyway)
-    max_seq_len  = 15,   # límit per generate(); training usa padding dinàmic
-    svara_cond_dim = 8,  # cVAE: svara one-hot (7) + log1p(total_dur_sec) (1)
+    hidden_dim   = 16,
+    latent_dim   = 8,
+    num_layers   = 1,
+    dropout      = 0.0,
+    max_seq_len  = 15,
+    svara_cond_dim = 7,
     condition_z_every_step = True,
-    teacher_forcing_ratio  = 0.0,   # decoder never sees real prev token → must use z
-    lambda_type       = 0.2,
-    lambda_dur_cp     = 0.3,    # MI_svara=0.11, MI_perf=0.05 → invariant-ish
-    lambda_dur_stap   = 0.05,   # MI_perf=0.26-0.39 → performer-dependent, penalitzar poc
-    lambda_dur_stat   = 0.05,
-    lambda_dur_sil    = 0.1,    # MI weak
-    lambda_cp_cents   = 3.0,
-    lambda_stap_cents = 7.0,
-    lambda_stat_cents = 7.0,
-    lambda_length     = 0.1,
-    lambda_dur_tra    = 0.1,    # TR duration — return time, informative
-    lambda_dur_trd    = 0.1,
-    beta              = 0.5,
-    free_bits         = 0.5,  # prevé posterior collapse: KL ≥ 0.5 × 32 = 16 nats
+    teacher_forcing_ratio  = 0.0,  # used for val/generate; train uses schedule
+    # MI-calibrated lambdas (see svara_mi_analysis.py, 2026-05-13)
+    lambda_type       = 0.5,   # grammar = most important structural feature
+    lambda_dur_cp     = 0.05,  # MI_sv=0.057 low & performer-contaminated (was 0.3)
+    lambda_dur_stap   = 0.1,   # best struct ratio 1.9x, underweighted (was 0.05)
+    lambda_dur_stat   = 0.02,  # MI_pf > MI_sv, reduce (was 0.05)
+    lambda_dur_sil    = 0.1,   # weak signal, unchanged
+    lambda_cp_cents   = 2.0,   # MI_pf=0.126 significant, slight reduction (was 3.0)
+    lambda_stap_cents = 7.0,   # ratio 8.9x, well-justified
+    lambda_stat_cents = 7.0,   # highest MI_sv=0.840, keep
+    lambda_length     = 0.2,   # ratio=17.0x, most performer-invariant (was 0.1)
+    lambda_dur_tra    = 0.01,  # MI_sv=0.000, pure performer noise (was 0.1)
+    lambda_dur_trd    = 0.02,  # MI_pf > MI_sv (was 0.1)
+    beta              = 0.1,
+    free_bits         = 0.0,   # floor = 0.1 × 32 = 3.2 nats
+    cond_dropout_p    = 0.8,   # 80% seqüències sense cond → decoder ha d'usar z
+    cond_in_steps     = False, # cond only in init_hidden, forces grammar through z
+    use_hard_mask     = True,  # apply VALID_NEXT mask during training → grammar signal
     use_huber_for_continuous = True,
-    use_attention     = True,  # attention pooling sobre tots els hidden states encoder
+    use_attention     = True,
 )
 
 
@@ -110,23 +119,30 @@ def _make_loaders(
     val_fraction: float,
     batch_size: int,
     max_seq_len: int,
+    val_recording_id: str | None = None,
 ) -> tuple[DataLoader, DataLoader]:
-    dataset = SvaraDataset(
-        recording_ids=recording_ids,
-        feature_cols=DATASET_FEATURE_COLS,
-    )
-    print(f"  Dataset: {len(dataset)} svaras")
-
-    n_val   = max(1, int(len(dataset) * val_fraction))
-    n_train = len(dataset) - n_val
-    train_ds, val_ds = random_split(
-        dataset, [n_train, n_val],
-        generator=torch.Generator().manual_seed(42),
-    )
-    print(f"  Train: {n_train}  Val: {n_val}")
-
-    # max_len=None → padding dinàmic al màxim del batch
     collate = lambda b: collate_svara_batch(b, max_len=None)
+
+    if val_recording_id is not None:
+        # Leave-one-recording-out split
+        all_ids = recording_ids if recording_ids is not None else S.SARASUDA_VARNAM
+        train_ids = [r for r in all_ids if r != val_recording_id]
+        train_ds = SvaraDataset(recording_ids=train_ids,         feature_cols=DATASET_FEATURE_COLS)
+        val_ds   = SvaraDataset(recording_ids=[val_recording_id], feature_cols=DATASET_FEATURE_COLS)
+        print(f"  Train: {len(train_ds)} svaras ({', '.join(train_ids)})")
+        print(f"  Val:   {len(val_ds)} svaras  ({val_recording_id})")
+    else:
+        # Random split
+        dataset = SvaraDataset(recording_ids=recording_ids, feature_cols=DATASET_FEATURE_COLS)
+        print(f"  Dataset: {len(dataset)} svaras")
+        n_val   = max(1, int(len(dataset) * val_fraction))
+        n_train = len(dataset) - n_val
+        train_ds, val_ds = random_split(
+            dataset, [n_train, n_val],
+            generator=torch.Generator().manual_seed(42),
+        )
+        print(f"  Train: {n_train}  Val: {n_val}")
+
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,  collate_fn=collate)
     val_loader   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False, collate_fn=collate)
     return train_loader, val_loader
@@ -142,11 +158,10 @@ def _val_epoch(
     model.eval()
     totals: dict[str, float] = {}
     n_batches = 0
-    for x, lengths, svara_idx, total_dur in loader:
+    for x, lengths, svara_idx in loader:
         x, lengths = x.to(device), lengths.to(device)
-        svara_idx, total_dur = svara_idx.to(device), total_dur.to(device)
-        outputs = model(x, lengths, svara_idx=svara_idx, total_dur=total_dur,
-                        teacher_forcing_ratio=0.0)
+        svara_idx = svara_idx.to(device)
+        outputs = model(x, lengths, svara_idx=svara_idx, teacher_forcing_ratio=0.0)
         beta = min(model.cfg.beta, linear_kl_beta(global_step, WARMUP_STEPS))
         _, stats = total_vae_loss(outputs, x, lengths, model.cfg, beta=beta)
         for k, v in stats.items():
@@ -185,6 +200,7 @@ def train(
     checkpoint_dir: Path = CHECKPOINT_DIR,
     model_cfg: ModelConfig = MODEL_CFG,
     new_run: bool = False,
+    fold: int | None = None,
 ):
     torch.manual_seed(SEED)
     random.seed(SEED)
@@ -192,8 +208,17 @@ def train(
 
     device = _device()
 
+    # Fold overrides: leave-one-recording-out + dedicated checkpoint dir
+    val_recording_id: str | None = None
+    if fold is not None:
+        val_recording_id = S.SARASUDA_VARNAM[fold]
+        short = val_recording_id.split("_")[2]   # e.g. "bdn"
+        checkpoint_dir = CV_CHECKPOINT_DIR / f"fold_{fold}_{short}"
+        print(f"[train] 5-fold CV  fold={fold}  val={val_recording_id}")
+
     train_loader, val_loader = _make_loaders(
-        recording_ids, val_fraction, batch_size, model_cfg.max_seq_len
+        recording_ids, val_fraction, batch_size, model_cfg.max_seq_len,
+        val_recording_id=val_recording_id,
     )
 
     model     = SvaraGRUVAE(model_cfg).to(device)
@@ -254,14 +279,16 @@ def train(
             t0 = time.time()
 
             model.train()
+            tf_ratio = max(0.0, TF_START * (1.0 - epoch / TF_DECAY))
             train_totals: dict[str, float] = {}
             n_batches = 0
-            for x, lengths, svara_idx, total_dur in train_loader:
+            for x, lengths, svara_idx in train_loader:
                 x, lengths = x.to(device), lengths.to(device)
-                svara_idx, total_dur = svara_idx.to(device), total_dur.to(device)
+                svara_idx = svara_idx.to(device)
                 optimizer.zero_grad()
                 beta    = min(model_cfg.beta, linear_kl_beta(global_step, warmup_steps))
-                outputs = model(x, lengths, svara_idx=svara_idx, total_dur=total_dur)
+                outputs = model(x, lengths, svara_idx=svara_idx,
+                                teacher_forcing_ratio=tf_ratio)
                 loss, stats = total_vae_loss(outputs, x, lengths, model_cfg, beta=beta)
                 loss.backward()
                 optimizer.step()
@@ -300,7 +327,7 @@ def train(
                 f"cents={_fmt(val_stats,'cents_loss')} "
                 f"len={_fmt(val_stats,'length_loss')} "
                 f"kl={_fmt(val_stats,'kl_loss')})  "
-                f"beta={beta_now:.3f}  lr={lr_now:.2e}  ({elapsed:.1f}s){flag}"
+                f"beta={beta_now:.3f}  tf={tf_ratio:.2f}  lr={lr_now:.2e}  ({elapsed:.1f}s){flag}"
             )
 
             history.append({"epoch": epoch, "train": train_stats, "val": val_stats})
@@ -331,5 +358,14 @@ if __name__ == "__main__":
     parser.add_argument("--epochs",   type=int,   default=EPOCHS)
     parser.add_argument("--new-run",  action="store_true",
                         help="Ignora last.pt i comença des de zero")
+    parser.add_argument("--fold",     type=int,   default=None, choices=[0, 1, 2, 3, 4],
+                        help="Leave-one-out fold (0-4). Activa 5-fold CV.")
+    parser.add_argument("--all-folds", action="store_true",
+                        help="Entrena els 5 folds seqüencialment")
     args = parser.parse_args()
-    train(epochs=args.epochs, new_run=args.new_run)
+    if args.all_folds:
+        for f in range(5):
+            print(f"\n{'='*60}\n  FOLD {f}/4\n{'='*60}")
+            train(epochs=args.epochs, new_run=args.new_run, fold=f)
+    else:
+        train(epochs=args.epochs, new_run=args.new_run, fold=args.fold)

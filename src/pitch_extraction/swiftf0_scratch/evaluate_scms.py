@@ -44,10 +44,10 @@ import settings
 from src.pitch_extraction.swiftf0_finetune.dataset import scms_official_split
 
 SCMS_ROOT          = settings.PROJECT_ROOT / "data" / "datasets" / "scms"
-SEP_ROOT           = settings.DATA_INTERIM / "scms_separated"
-PITCH_ROOT_FTANET  = settings.DATA_INTERIM / "scms_pitch_ftanet"
-PITCH_ROOT_FINE    = settings.DATA_INTERIM / "scms_pitch_swiftf0finetune"
-PITCH_ROOT_SCRATCH = settings.DATA_INTERIM / "scms_pitch_swiftf0scratch"
+SEP_ROOT           = settings.INTERIM_SEP_SCMS
+PITCH_ROOT_FTANET  = settings.INTERIM_PITCH_SCMS / "ftanet"
+PITCH_ROOT_FINE    = settings.INTERIM_PITCH_SCMS / "swiftf0_finetune"
+PITCH_ROOT_SCRATCH = settings.INTERIM_PITCH_SCMS / "swiftf0_scratch"
 
 PAPER_BASELINE = {
     "FTA-C (paper)": dict(VR=96.35, VFA=8.38,  RPA=90.17, RCA=90.46, OA=90.99),
@@ -82,11 +82,11 @@ def load_ftanet(stem: str, source: str) -> tuple[np.ndarray, np.ndarray] | None:
 def load_swiftf0(model_type: str, run_name: str | None, device: torch.device):
     if model_type == "finetune":
         from src.pitch_extraction.swiftf0_finetune.model import SwiftF0
-        ckpt_dir = settings.DATA_INTERIM / "models" / "swiftf0_carnatic"
+        ckpt_dir = settings.SWIFTF0_CARNATIC_DIR
         Model = SwiftF0
     else:
         from src.pitch_extraction.swiftf0_scratch.model import SwiftF0Scratch
-        ckpt_dir = settings.DATA_INTERIM / "models" / "swiftf0_scratch"
+        ckpt_dir = settings.SWIFTF0_SCRATCH_DIR
         Model = SwiftF0Scratch
 
     run_dir = (ckpt_dir / run_name) if run_name else sorted(ckpt_dir.glob("run_*"))[-1]

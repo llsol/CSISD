@@ -30,8 +30,8 @@ import settings
 from src.pitch_extraction.swiftf0_finetune.dataset import scms_official_split
 
 DEFAULT_MODEL   = "model_bs_roformer_ep_317_sdr_12.9755.ckpt"
-CV_OUT_ROOT     = settings.DATA_INTERIM / "source_separation_as" / "separated"
-SCMS_OUT_ROOT   = settings.DATA_INTERIM / "scms_separated"
+CV_OUT_ROOT     = settings.INTERIM_SEP_CV_AS
+SCMS_OUT_ROOT   = settings.INTERIM_SEP_SCMS
 SCMS_AUDIO_DIR  = settings.PROJECT_ROOT / "data" / "datasets" / "scms" / "audio"
 MIN_DURATION_S  = 3.0   # BS-RoFormer crashes on very short clips
 

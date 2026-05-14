@@ -40,7 +40,7 @@ from src.features.structural_embedding import (
 L_CANONICAL = 64    # fixed output length after resampling
 MIN_SAMPLES = 6     # discard CP segments shorter than this
 
-DEFAULT_OUT = S.DATA_INTERIM / "models" / "curve_vae" / "gt_cp_curves.parquet"
+DEFAULT_OUT = S.CURVE_VAE_DIR / "gt_cp_curves.parquet"
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +60,7 @@ def extract_one_recording(
     min_samples: int = MIN_SAMPLES,
     l_canonical: int = L_CANONICAL,
 ) -> list[dict]:
-    interim_root = Path("data/interim")
+    interim_root = S.INTERIM_RECORDINGS
     corpus_root  = Path("data/corpus")
 
     df_pitch = load_preprocessed_pitch(

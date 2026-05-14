@@ -26,23 +26,27 @@ from src.models.curve_vae.fit_sta_tr_curves import curve_model
 from src.models.curve_vae.sta_tr_model import CurveModel
 from src.models.curve_vae.plot_generated_sta_tr import plot_comparison
 
-FITTED  = S.DATA_INTERIM / "models" / "curve_vae" / "gt_curves_fitted.parquet"
+FITTED  = S.CURVE_VAE_DIR / "gt_curves_fitted.parquet"
 OUT_DIR = S.FIGURES_DIR / "curve_vae"
 
 SVARA_LABELS = sorted(['D', 'G', 'M', 'N', 'P', 'R', 'S'])
 T_DENSE      = np.linspace(0, 1, 200)
 
 
+_STA_TYPES = ["STAp", "STAt"]
+_TR_TYPES  = ["TRa",  "TRd"]
+
+
 def plot_sample_fits(df: pl.DataFrame, out: Path, n_sta: int = 12, n_tr: int = 8) -> None:
     # sample: mix of normal and N-shape curves
-    sta_n = df.filter((pl.col("seg_type") == "STA") & (pl.col("A_osc") < -0.15)).sample(
-        min(4, int((df["seg_type"] == "STA").sum())), seed=1)
-    sta_r = df.filter((pl.col("seg_type") == "STA") & (pl.col("A_osc") >= -0.15)).sample(
-        n_sta - len(sta_n), seed=42)
-    tr_n  = df.filter((pl.col("seg_type") == "TR")  & (pl.col("A_osc") < -0.15)).sample(
-        min(3, int((df["seg_type"] == "TR").sum())), seed=1)
-    tr_r  = df.filter((pl.col("seg_type") == "TR")  & (pl.col("A_osc") >= -0.15)).sample(
-        n_tr - len(tr_n), seed=42)
+    sta_n = df.filter(pl.col("seg_type").is_in(_STA_TYPES) & (pl.col("A_osc") < -0.15)).sample(
+        min(4, df.filter(pl.col("seg_type").is_in(_STA_TYPES)).height), seed=1)
+    _sta_r_pool = df.filter(pl.col("seg_type").is_in(_STA_TYPES) & (pl.col("A_osc") >= -0.15))
+    sta_r = _sta_r_pool.sample(min(n_sta - len(sta_n), len(_sta_r_pool)), seed=42)
+    tr_n  = df.filter(pl.col("seg_type").is_in(_TR_TYPES) & (pl.col("A_osc") < -0.15)).sample(
+        min(3, df.filter(pl.col("seg_type").is_in(_TR_TYPES)).height), seed=1)
+    _tr_r_pool = df.filter(pl.col("seg_type").is_in(_TR_TYPES) & (pl.col("A_osc") >= -0.15))
+    tr_r  = _tr_r_pool.sample(min(n_tr - len(tr_n), len(_tr_r_pool)), seed=42)
     sta = pl.concat([sta_n, sta_r])
     tr  = pl.concat([tr_n,  tr_r])
 
@@ -83,8 +87,10 @@ def plot_sample_fits(df: pl.DataFrame, out: Path, n_sta: int = 12, n_tr: int = 8
 def plot_param_distributions(df: pl.DataFrame, out: Path) -> None:
     fig, axes = plt.subplots(2, 3, figsize=(13, 7))
 
-    for row_i, (seg_type, clr) in enumerate([("STA", "#ff9800"), ("TR", "#2196f3")]):
-        sub = df.filter(pl.col("seg_type") == seg_type)
+    for row_i, (seg_type, types, clr) in enumerate([
+        ("STA", _STA_TYPES, "#ff9800"), ("TR", _TR_TYPES, "#2196f3")
+    ]):
+        sub = df.filter(pl.col("seg_type").is_in(types))
         for col_i, (arr, title) in enumerate([
             (sub["k_steep"].to_numpy(),   f"{seg_type} — k (steepness)"),
             (sub["s_inflect"].to_numpy(),  f"{seg_type} — s (skew / inflection)"),
@@ -113,8 +119,8 @@ def plot_param_distributions(df: pl.DataFrame, out: Path) -> None:
 
 def plot_ks_scatter(df: pl.DataFrame, out: Path) -> None:
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
-    for ax, seg_type in zip(axes, ("STA", "TR")):
-        sub = df.filter(pl.col("seg_type") == seg_type)
+    for ax, (seg_type, types) in zip(axes, [("STA", _STA_TYPES), ("TR", _TR_TYPES)]):
+        sub = df.filter(pl.col("seg_type").is_in(types))
         k   = sub["k_steep"].to_numpy()
         s   = sub["s_inflect"].to_numpy()
         A   = sub["A_osc"].to_numpy()

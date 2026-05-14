@@ -26,8 +26,8 @@ import settings as S
 from src.models.gruvae.dataset_gruvae import SVARA_TO_IDX
 from src.models.curve_vae.cp_vae import CPVAE, CPVAEConfig, L_CANONICAL
 
-DATA_PATH = S.DATA_INTERIM / "models" / "curve_vae" / "gt_cp_curves.parquet"
-CKPT_DIR  = S.DATA_INTERIM / "models" / "curve_vae" / "cp_vae_runs"
+DATA_PATH = S.CURVE_VAE_DIR / "gt_cp_curves.parquet"
+CKPT_DIR  = S.CURVE_VAE_DIR / "cp_vae_runs"
 
 
 # ---------------------------------------------------------------------------

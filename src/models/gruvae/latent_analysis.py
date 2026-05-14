@@ -56,9 +56,9 @@ from src.models.gruvae.dataset_gruvae import (
 )
 from src.models.gruvae.model_gruvae import ModelConfig, SvaraGRUVAE, DATASET_FEATURE_COLS
 
-CKPT_DIR    = settings.DATA_INTERIM / "models" / "gruvae_v4"
+CKPT_DIR    = settings.GRUVAE_DIR
 OUT_FIGS    = settings.FIGURES_DIR  / "gruvae" / "latent_analysis"
-OUT_DATA    = settings.DATA_INTERIM / "gruvae_latent"
+OUT_DATA    = settings.GRUVAE_DIR   / "latent"
 IDX_TO_SVARA = {v: k for k, v in SVARA_TO_IDX.items()}
 
 SVARA_COLORS = {

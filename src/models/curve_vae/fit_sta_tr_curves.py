@@ -42,12 +42,12 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 import settings as S
 
-DEFAULT_CURVES = S.DATA_INTERIM / "models" / "curve_vae" / "gt_curves.parquet"
-DEFAULT_OUT    = S.DATA_INTERIM / "models" / "curve_vae" / "gt_curves_fitted.parquet"
+DEFAULT_CURVES = S.CURVE_VAE_DIR / "gt_curves.parquet"
+DEFAULT_OUT    = S.CURVE_VAE_DIR / "gt_curves_fitted.parquet"
 
-K_MIN, K_MAX = 0.3,  50.0
+K_MIN, K_MAX = 0.3,  10.0
 S_MIN, S_MAX = 0.01, 0.99
-A_MIN, A_MAX = -3.0,  3.0
+A_MIN, A_MAX = -0.4,  0.2
 
 
 # ---------------------------------------------------------------------------
@@ -165,9 +165,11 @@ def main() -> None:
     df_fit.write_parquet(out)
     print(f"\nSaved → {out}")
 
-    for seg_type in ("STA", "TR"):
+    for seg_type in ("STAp", "STAt", "TRa", "TRd"):
         sub = df_fit.filter(pl.col("seg_type") == seg_type)
         print(f"\n{seg_type}  (n={len(sub)})")
+        if len(sub) == 0:
+            continue
         print(f"  k:    median={sub['k_steep'].median():.3f}  "
               f"p5={sub['k_steep'].quantile(0.05):.3f}  "
               f"p95={sub['k_steep'].quantile(0.95):.3f}")

@@ -2,13 +2,10 @@
 GRU + VAE model for structural svara representation.
 
 Input per segment (MODEL_INPUT_DIM = 8):
-    [onehot_CP, onehot_SIL, onehot_STAp, onehot_STAt, onehot_TRa, onehot_TRd, dur_rel, cents_norm]
+    [onehot_CP, onehot_SIL, onehot_STAp, onehot_STAt, onehot_TRa, onehot_TRd, dur_abs_sec, cents_norm]
 
-Note: dataset_gruvae produces sequences with INPUT_DIM = 9, which includes
-total_dur_sec at index 7. Use DATASET_FEATURE_COLS to slice the right features
-before feeding to the model:
-
-    x_model = x_dataset[:, :, DATASET_FEATURE_COLS]   # (batch, seq_len, 8)
+dataset_gruvae produces sequences with INPUT_DIM = 8 matching this layout directly.
+DATASET_FEATURE_COLS = None → use all columns.
 
 Shape conventions:
     x:        (batch, seq_len, MODEL_INPUT_DIM)
@@ -31,26 +28,23 @@ import torch.nn.functional as F
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 
-# Indices to select from dataset_gruvae's 9-feature sequences
-# dataset cols: [oh_CP, oh_SIL, oh_STAp, oh_STAt, oh_TRa, oh_TRd, dur_rel, total_dur_sec, cents_norm]
-# model cols:   [oh_CP, oh_SIL, oh_STAp, oh_STAt, oh_TRa, oh_TRd, dur_rel,                cents_norm]
-DATASET_FEATURE_COLS = [0, 1, 2, 3, 4, 5, 6, 8]
-MODEL_INPUT_DIM = 8   # == len(DATASET_FEATURE_COLS)
+# dataset cols: [oh_CP, oh_SIL, oh_STAp, oh_STAt, oh_TRa, oh_TRd, dur_abs_sec, cents_norm]
+# model cols:   same — pass feature_cols=None to SvaraDataset
+DATASET_FEATURE_COLS = None
+MODEL_INPUT_DIM = 8
 
-# Type indices: CP=0, SIL=1, STAp=2, STAt=3, TRa=4, TRd=5
-# Musical grammar (conservative, physics-based):
-#   STAp (peak) → TRd or SIL    (peak followed by descending transition or silence)
-#   STAt (trough) → TRa or SIL  (trough followed by ascending transition or silence)
-#   TRa (ascending) → CP or STAp  (ascending ends at stable pitch or new peak)
-#   TRd (descending) → CP or STAt  (descending ends at stable pitch or new trough)
-# TRa/TRd at end-of-sequence is fine (no successor needed).
+
+# Empirical transitions from 2760-svara corpus (2026-05-13).
+# Most frequent: STAp↔STAt (gamakas), TRa/TRd → CP/SIL (cadences).
+# TRa and TRd ONLY go to CP or SIL — this is the only hard musical constraint.
+# STAp/STAt can follow almost anything (gamaka oscillations); CP/SIL allow all successors.
 VALID_NEXT: dict[int, set[int]] = {
-    0: {1, 2, 3, 4, 5},   # CP   → SIL, STAp, STAt, TRa, TRd
-    1: {0, 2, 3, 4, 5},   # SIL  → CP, STAp, STAt, TRa, TRd
-    2: {5, 1},             # STAp → TRd, SIL  (peak → descending or silence)
-    3: {4, 1},             # STAt → TRa, SIL  (trough → ascending or silence)
-    4: {0, 2},             # TRa  → CP, STAp  (ascending ends at stable or peak)
-    5: {0, 3},             # TRd  → CP, STAt  (descending ends at stable or trough)
+    0: {1, 2, 3, 4, 5},      # CP   → all except CP   (CP→CP never observed)
+    1: {0, 2, 3, 4, 5},      # SIL  → all except SIL  (SIL→SIL never observed)
+    2: {2, 3, 4, 5},      # STAp → all except SIL or CP by definition before CP a STA is a TR
+    3: {2, 3, 4, 5},      # STAt → all except SIL or CP by definition before CP a STA is a TR
+    4: {0, 1},               # TRa  → CP, SIL only    (412 CP, 71 SIL — no other successor in data)
+    5: {0, 1},               # TRd  → CP, SIL only    (388 CP, 14 SIL — no other successor in data)
 }
 
 # Number of svara labels — always 7, constant across config variants
@@ -65,17 +59,16 @@ _N_SVARA = 7
 class ModelConfig:
     input_dim:              int   = MODEL_INPUT_DIM
     type_dim:               int   = 6
-    hidden_dim:             int   = 128
-    latent_dim:             int   = 16
+    hidden_dim:             int   = 16
+    latent_dim:             int   = 8
     num_layers:             int   = 1
     dropout:                float = 0.0
     max_seq_len:            int   = 32
     condition_z_every_step: bool  = True
     teacher_forcing_ratio:  float = 1.0
 
-    # Conditional VAE: condition decoder on svara label one-hot + log1p(total_dur_sec).
-    # 7 = svara one-hot only (backward compat); 8 = svara one-hot + duration scalar.
-    # Set 0 to disable conditioning entirely.
+    # Conditional VAE: condition decoder on svara label one-hot.
+    # 7 = svara one-hot; 0 = unconditional.
     svara_cond_dim:         int   = 7
 
     lambda_type:            float = 1.0
@@ -92,8 +85,11 @@ class ModelConfig:
 
     use_attention:          bool  = True   # pool all GRU states via learned attention
 
-    beta:                   float = 1.0
+    beta:                   float = 0.1
     free_bits:              float = 0.0   # min nats per latent dim; 0 = disabled
+    cond_dropout_p:         float = 0.0   # prob of zeroing cond during training
+    cond_in_steps:          bool  = True  # False → cond only in init_hidden, not per-step
+    use_hard_mask:          bool  = False # apply VALID_NEXT mask during training forward pass
     use_huber_for_continuous: bool = True
 
 
@@ -175,10 +171,11 @@ class SvaraDecoder(nn.Module):
         super().__init__()
         self.cfg = cfg
         cond_dim = cfg.svara_cond_dim
+        step_cond_dim = cond_dim if cfg.cond_in_steps else 0
         decoder_input_dim = (
             cfg.input_dim
             + (cfg.latent_dim if cfg.condition_z_every_step else 0)
-            + cond_dim
+            + step_cond_dim
         )
 
         gru_dropout = cfg.dropout if cfg.num_layers > 1 else 0.0
@@ -209,7 +206,7 @@ class SvaraDecoder(nn.Module):
         parts = [prev_input]
         if self.cfg.condition_z_every_step:
             parts.append(z)
-        if self.cfg.svara_cond_dim > 0:
+        if self.cfg.svara_cond_dim > 0 and self.cfg.cond_in_steps:
             parts.append(cond)
         step_input = torch.cat(parts, dim=-1)
 
@@ -245,6 +242,16 @@ class SvaraDecoder(nn.Module):
     ) -> dict:
         batch_size = z.size(0)
         device     = z.device
+
+        # Conditioning dropout: zero out cond for a random subset of sequences.
+        # Forces decoder to rely on z when cond is unavailable, preventing collapse.
+        # Applied consistently for the full sequence (not per-step).
+        if self.training and self.cfg.cond_dropout_p > 0.0 and cond.size(-1) > 0:
+            keep = torch.bernoulli(
+                torch.full((batch_size, 1), 1.0 - self.cfg.cond_dropout_p, device=device)
+            )
+            cond = cond * keep
+
         hidden     = self.latent_to_hidden(z, cond)
 
         if max_len is None:
@@ -252,14 +259,13 @@ class SvaraDecoder(nn.Module):
 
         prev_input = build_start_token(batch_size, self.cfg.input_dim, device)
 
-        type_logits_all, dur_all, cents_all = [], [], []
+        type_logits_all, type_logits_gen_all, dur_all, cents_all = [], [], [], []
         # Track previous predicted type index per sample (None = start token, no constraint)
         prev_type_idx: torch.Tensor | None = None
 
-        # Build per-type valid-next masks once (on CPU, then move to device)
+        # Build per-type invalid mask once (True = block that next_type)
         if use_hard_mask:
             n_types = self.cfg.type_dim
-            # invalid_mask[prev_type, next_type] = True means BLOCK next_type
             invalid_mask = torch.ones(n_types, n_types, dtype=torch.bool, device=device)
             for prev_t, valid_set in VALID_NEXT.items():
                 for nxt in valid_set:
@@ -268,13 +274,17 @@ class SvaraDecoder(nn.Module):
         for t in range(max_len):
             type_logits, dur_pred, cents_pred, hidden = self.step(prev_input, hidden, z, cond)
 
-            # Apply hard grammar mask based on previous predicted type
+            # Masked logits for autoregressive next-step selection and generation output.
+            # Raw logits (type_logits) go to the loss — masking them causes NaN when
+            # the model diverges from GT and the mask blocks the GT target.
             if use_hard_mask and prev_type_idx is not None:
-                # prev_type_idx: (batch,)  →  row into invalid_mask
-                per_sample_mask = invalid_mask[prev_type_idx]          # (batch, n_types)
-                type_logits = type_logits.masked_fill(per_sample_mask, float("-inf"))
+                per_sample_mask = invalid_mask[prev_type_idx]   # (batch, n_types)
+                type_logits_gen = type_logits.masked_fill(per_sample_mask, float("-inf"))
+            else:
+                type_logits_gen = type_logits
 
-            type_logits_all.append(type_logits)
+            type_logits_all.append(type_logits)          # raw → CE loss
+            type_logits_gen_all.append(type_logits_gen)  # masked → generation
             dur_all.append(dur_pred)
             cents_all.append(cents_pred)
 
@@ -284,16 +294,17 @@ class SvaraDecoder(nn.Module):
                 and torch.rand(1, device=device).item() < teacher_forcing_ratio
             )
             if use_teacher:
-                prev_input     = target_seq[:, t, :]
-                prev_type_idx  = target_seq[:, t, :self.cfg.type_dim].argmax(dim=-1)
+                prev_input    = target_seq[:, t, :]
+                prev_type_idx = target_seq[:, t, :self.cfg.type_dim].argmax(dim=-1)
             else:
-                prev_input     = self._next_input_from_preds(type_logits, dur_pred, cents_pred)
-                prev_type_idx  = type_logits.argmax(dim=-1)
+                prev_input    = self._next_input_from_preds(type_logits_gen, dur_pred, cents_pred)
+                prev_type_idx = type_logits_gen.argmax(dim=-1)
 
         return {
-            "type_logits": torch.stack(type_logits_all, dim=1),
-            "duration":    torch.stack(dur_all, dim=1),
-            "cents":       torch.stack(cents_all, dim=1),
+            "type_logits":     torch.stack(type_logits_all, dim=1),      # raw, for loss
+            "type_logits_gen": torch.stack(type_logits_gen_all, dim=1),  # masked, for generation
+            "duration":        torch.stack(dur_all, dim=1),
+            "cents":           torch.stack(cents_all, dim=1),
         }
 
 
@@ -326,35 +337,24 @@ class SvaraGRUVAE(nn.Module):
     def _make_cond(
         self,
         svara_idx: torch.Tensor | None,
-        total_dur: torch.Tensor | None,
         batch_size: int,
         device: torch.device,
     ) -> torch.Tensor:
         """Condition vector (batch, svara_cond_dim).
         svara_cond_dim == 0: empty (unconditional).
-        svara_cond_dim == 7: svara one-hot only.
-        svara_cond_dim == 8: svara one-hot + log1p(total_dur_sec).
+        svara_cond_dim == 7: svara one-hot.
         """
         if self.cfg.svara_cond_dim == 0:
             return torch.zeros(batch_size, 0, device=device)
         if svara_idx is None:
-            svara_oh = torch.zeros(batch_size, _N_SVARA, device=device)
-        else:
-            svara_oh = F.one_hot(svara_idx, num_classes=_N_SVARA).float()
-        if self.cfg.svara_cond_dim <= _N_SVARA:
-            return svara_oh
-        if total_dur is None:
-            dur_feat = torch.zeros(batch_size, 1, device=device)
-        else:
-            dur_feat = torch.log1p(total_dur.float().to(device)).unsqueeze(-1)
-        return torch.cat([svara_oh, dur_feat], dim=-1)
+            return torch.zeros(batch_size, _N_SVARA, device=device)
+        return F.one_hot(svara_idx, num_classes=_N_SVARA).float()
 
     def forward(
         self,
         x: torch.Tensor,
         lengths: torch.Tensor,
         svara_idx: torch.Tensor | None = None,
-        total_dur: torch.Tensor | None = None,
         teacher_forcing_ratio: float | None = None,
     ) -> dict:
         if teacher_forcing_ratio is None:
@@ -362,11 +362,12 @@ class SvaraGRUVAE(nn.Module):
 
         mu, logvar, attn_w = self.encoder(x, lengths)
         z = self.reparameterize(mu, logvar)
-        cond = self._make_cond(svara_idx, total_dur, x.size(0), x.device)
+        cond = self._make_cond(svara_idx, x.size(0), x.device)
         decoded = self.decoder(
             z, cond, target_seq=x,
             teacher_forcing_ratio=teacher_forcing_ratio,
             max_len=x.size(1),
+            use_hard_mask=self.cfg.use_hard_mask,
         )
         return {
             "mu": mu, "logvar": logvar, "z": z, "attn_w": attn_w,
@@ -379,17 +380,16 @@ class SvaraGRUVAE(nn.Module):
         batch_size: int = 1,
         z: torch.Tensor | None = None,
         svara_idx: torch.Tensor | None = None,
-        total_dur: torch.Tensor | None = None,
         max_len: int | None = None,
         device: torch.device | None = None,
-        use_hard_mask: bool = False,
+        use_hard_mask: bool = True,
     ) -> dict:
         if device is None:
             device = next(self.parameters()).device
         if z is None:
             z = torch.randn(batch_size, self.cfg.latent_dim, device=device)
 
-        cond = self._make_cond(svara_idx, total_dur, z.size(0), device)
+        cond = self._make_cond(svara_idx, z.size(0), device)
 
         self.eval()
         with torch.no_grad():
@@ -401,21 +401,9 @@ class SvaraGRUVAE(nn.Module):
                 z, cond, teacher_forcing_ratio=0.0, max_len=max_len,
                 use_hard_mask=use_hard_mask,
             )
-            idx = decoded["type_logits"].argmax(dim=-1)   # (batch, seq_len)
-
-            # Final-state constraint: STAp/STAt cannot be the last segment.
-            # STAp (idx=2) → TRd (idx=5);  STAt (idx=3) → TRa (idx=4).
-            if use_hard_mask:
-                last_positions = (
-                    pred_len.round().clamp(1, max_len).long() - 1
-                )  # (batch,)
-                for b in range(idx.size(0)):
-                    last_pos = int(last_positions[b].item())
-                    t = idx[b, last_pos].item()
-                    if t == 2:   # STAp → TRd
-                        idx[b, last_pos] = 5
-                    elif t == 3: # STAt → TRa
-                        idx[b, last_pos] = 4
+            idx = decoded["type_logits_gen"].argmax(dim=-1)   # masked logits → valid types
+            # Note: TRa/TRd as last segment is valid and common (1184/728 corpus endings).
+            # No final-state override: it created predecessor violations (STAp→CP).
 
             oh  = F.one_hot(idx, num_classes=self.cfg.type_dim).float()
             generated = torch.cat(
@@ -454,6 +442,21 @@ def reconstruction_loss(
         target_type_idx.reshape(-1),
         reduction="none",
     ).view(batch_size, seq_len)
+
+    # Grammar-violation mask: zero type_loss for GT transitions prohibited by VALID_NEXT.
+    # Prevents conflicting gradients when GT data contains patterns we explicitly ban
+    # (e.g. STAp→CP, which exists in ~1% of corpus svaras but is blocked by the mask).
+    if cfg.use_hard_mask:
+        prev_gt = torch.cat([
+            torch.full((batch_size, 1), -1, dtype=torch.long, device=device),
+            target_type_idx[:, :-1],
+        ], dim=1)  # (B, T); -1 at t=0 means no predecessor constraint
+        grammar_ok = torch.ones(batch_size, seq_len, dtype=torch.bool, device=device)
+        for prev_t, valid_set in VALID_NEXT.items():
+            for next_t in range(cfg.type_dim):
+                if next_t not in valid_set:
+                    grammar_ok &= ~((prev_gt == prev_t) & (target_type_idx == next_t))
+        type_loss_all = type_loss_all * grammar_ok.float()
 
     if cfg.use_huber_for_continuous:
         dur_loss_all   = F.smooth_l1_loss(outputs["duration"], target_duration, reduction="none")

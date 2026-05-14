@@ -24,7 +24,7 @@ sys.path.insert(0, str(ROOT))
 import settings as S
 from src.models.curve_vae.sta_tr_model import CurveModel, SVARA_LABELS
 
-FITTED  = S.DATA_INTERIM / "models" / "curve_vae" / "gt_curves_fitted.parquet"
+FITTED  = S.CURVE_VAE_DIR / "gt_curves_fitted.parquet"
 OUT_DIR = S.FIGURES_DIR / "curve_vae"
 T_DENSE = np.linspace(0, 1, 200)
 
@@ -40,15 +40,16 @@ def plot_comparison(
     rng = np.random.default_rng(1)
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.5), sharey=False)
 
-    for ax, seg_type, color_gt, color_gen in [
-        (axes[0], "STA", "#ff9800", "#b71c1c"),
-        (axes[1], "TR",  "#2196f3", "#1a237e"),
-    ]:
-        sub = df.filter(pl.col("seg_type") == seg_type)
+    _GROUP = [
+        (axes[0], "STA", ["STAp", "STAt"], "#ff9800", "#b71c1c", (-0.15, 1.25)),
+        (axes[1], "TR",  ["TRa",  "TRd"],  "#2196f3", "#1a237e", (-0.6,  1.4)),
+    ]
+    for ax, label, subtypes, color_gt, color_gen, ylim in _GROUP:
+        sub = df.filter(pl.col("seg_type").is_in(subtypes))
         if svara:
             sub = sub.filter(pl.col("svara_label") == svara)
         if len(sub) == 0:
-            ax.set_title(f"{seg_type} (no data)")
+            ax.set_title(f"{label} (no data)")
             continue
 
         n_show = min(n_gt, len(sub))
@@ -61,24 +62,23 @@ def plot_comparison(
             lbl = "GT" if i == 0 else None
             ax.plot(t, p, "o-", ms=2, lw=0.8, color=color_gt, alpha=0.5, label=lbl)
 
-        # plot generated curves
-        gen = model.generate(seg_type, svara=svara, n=n_gen, rng=rng)
-        for i, g in enumerate(gen):
-            y   = g["curve_fn"](T_DENSE)
-            lbl = "Generated" if i == 0 else None
-            ax.plot(T_DENSE, y, "-", lw=1.5, color=color_gen, alpha=0.65, label=lbl)
+        # plot generated curves (split evenly across subtypes)
+        n_each = max(1, n_gen // len(subtypes))
+        gen_labeled = False
+        for st in subtypes:
+            for g in model.generate(st, svara=svara, n=n_each, rng=rng):
+                y   = g["curve_fn"](T_DENSE)
+                lbl = "Generated" if not gen_labeled else None
+                gen_labeled = True
+                ax.plot(T_DENSE, y, "-", lw=1.5, color=color_gen, alpha=0.65, label=lbl)
 
         sv_tag = f" (svara={svara})" if svara else " (all svaras)"
-        ax.set_title(f"{seg_type}{sv_tag}  n_gt={n_show}  n_gen={n_gen}", fontsize=9)
+        ax.set_title(f"{label}{sv_tag}  n_gt={n_show}  n_gen={n_gen}", fontsize=9)
         ax.set_xlabel("t (normalized)", fontsize=8)
         ax.set_ylabel("pitch (normalized)", fontsize=8)
         ax.legend(fontsize=8)
         ax.tick_params(labelsize=7)
-
-        if seg_type == "STA":
-            ax.set_ylim(-0.15, 1.25)
-        else:
-            ax.set_ylim(-0.6, 1.4)
+        ax.set_ylim(*ylim)
 
     sv_title = f"svara={svara}" if svara else "all svaras"
     fig.suptitle(f"Generated vs GT pitch curves  [{sv_title}]",

@@ -1,5 +1,6 @@
 import numpy as np
 import polars as pl
+import settings as S
 from settings import SARASUDA_VARNAM
 from pathlib import Path
 
@@ -23,7 +24,7 @@ def feature_extraction_one_recording(
     out_path: Path = None,
 ) -> pl.DataFrame:
 
-    preprocessed_path = Path(f"data/interim/{recording_id}/pitch/{recording_id}_pitch_preprocessed.parquet")
+    preprocessed_path = S.INTERIM_RECORDINGS / recording_id / "pitch" / f"{recording_id}_pitch_preprocessed.parquet"
     df_prep = load_pitch_file(preprocessed_path)
 
     # 1) afegeix globals (IMPORTANT: assigna el retorn)
@@ -42,7 +43,7 @@ def feature_extraction_one_recording(
 
     # 3) desa (1 recording -> 1 parquet)
     if out_path is None:
-        out_path = Path(f"data/interim/{recording_id}/features/{recording_id}_svara_features.parquet")
+        out_path = S.INTERIM_RECORDINGS / recording_id / "features" / f"{recording_id}_svara_features.parquet"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     df_features.write_parquet(out_path)
 

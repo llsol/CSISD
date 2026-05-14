@@ -32,8 +32,8 @@ import settings
 from src.pitch_extraction.swiftf0_finetune.dataset import scms_official_split
 
 SCMS_ROOT  = settings.PROJECT_ROOT / "data" / "datasets" / "scms"
-SEP_ROOT   = settings.DATA_INTERIM / "scms_separated"
-OUT_ROOT   = settings.DATA_INTERIM / "scms_pitch"
+SEP_ROOT   = settings.INTERIM_SEP_SCMS
+OUT_ROOT   = settings.INTERIM_PITCH_SCMS / "ftanet"
 MODEL_NAME = "melody:ftanet-carnatic"
 MODEL_SR   = 8000
 

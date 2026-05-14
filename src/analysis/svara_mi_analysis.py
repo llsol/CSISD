@@ -152,14 +152,14 @@ def run_mi_analysis(df, svara_labels, performers, out_dir: Path) -> None:
 
     bars = ax.barh(range(len(feats_sorted)), vals, color=cols, alpha=0.85, edgecolor='white', linewidth=0.5)
     ax.set_yticks(range(len(feats_sorted)))
-    ax.set_yticklabels(names, fontsize=10)
+    ax.set_yticklabels(names, fontsize=3)
     ax.invert_yaxis()
     ax.set_xlabel('Mutual Information (nats)', fontsize=11)
     ax.set_title('All features  (structural + pitch)\nMI vs. svara_label', fontsize=12)
     ax.grid(axis='x', alpha=0.3)
     for bar, v in zip(bars, vals):
         ax.text(v + 0.003, bar.get_y() + bar.get_height() / 2,
-                f'{v:.3f}', va='center', fontsize=9)
+                f'{v:.3f}', va='center', fontsize=3)
 
     legend_handles = [
         mpatches.Patch(color=COLOR_STRUCT, label='Structural', alpha=0.85),
@@ -176,14 +176,14 @@ def run_mi_analysis(df, svara_labels, performers, out_dir: Path) -> None:
     bars_s = ax.barh(range(len(feats_sorted_s)), vals_s, color=COLOR_STRUCT, alpha=0.85,
                      edgecolor='white', linewidth=0.5)
     ax.set_yticks(range(len(feats_sorted_s)))
-    ax.set_yticklabels(names_s, fontsize=10)
+    ax.set_yticklabels(names_s, fontsize=3)
     ax.invert_yaxis()
     ax.set_xlabel('Mutual Information (nats)', fontsize=11)
     ax.set_title('Structural features only\nMI vs. svara_label', fontsize=12)
     ax.grid(axis='x', alpha=0.3)
     for bar, v in zip(bars_s, vals_s):
         ax.text(v + 0.003, bar.get_y() + bar.get_height() / 2,
-                f'{v:.3f}', va='center', fontsize=9)
+                f'{v:.3f}', va='center', fontsize=3)
 
     fig.suptitle('Step 1 — Global Discriminative Power\nMI(descriptor, svara_label)  |  n=2760 svara occurrences', fontsize=13)
     plt.tight_layout()
@@ -234,7 +234,7 @@ def run_mi_analysis(df, svara_labels, performers, out_dir: Path) -> None:
     ax.set_xticks(range(len(performers)))
     ax.set_xticklabels(performers, fontsize=11)
     ax.set_yticks(range(len(feats_by_mean)))
-    ax.set_yticklabels([FEAT_LABELS[f] for f in feats_by_mean], fontsize=10)
+    ax.set_yticklabels([FEAT_LABELS[f] for f in feats_by_mean], fontsize=3)
     ax.set_title('MI(descriptor, svara_label)\nper performer', fontsize=12)
     plt.colorbar(im, ax=ax, shrink=0.8, label='MI (nats)')
 
@@ -244,7 +244,7 @@ def run_mi_analysis(df, svara_labels, performers, out_dir: Path) -> None:
             v = mat[i, j]
             rgba = cmap_h(norm_h(v))
             lum  = 0.299 * rgba[0] + 0.587 * rgba[1] + 0.114 * rgba[2]
-            ax.text(j, i, f'{v:.3f}', ha='center', va='center', fontsize=8,
+            ax.text(j, i, f'{v:.3f}', ha='center', va='center', fontsize=3,
                     color='black' if lum > 0.45 else 'white')
 
     # ─ Middle: mean MI + per-performer dots ─
@@ -261,7 +261,7 @@ def run_mi_analysis(df, svara_labels, performers, out_dir: Path) -> None:
                        edgecolors='black', linewidths=0.4, alpha=0.85)
 
     ax.set_yticks(range(len(feats_by_mean)))
-    ax.set_yticklabels([FEAT_LABELS[f] for f in feats_by_mean], fontsize=10)
+    ax.set_yticklabels([FEAT_LABELS[f] for f in feats_by_mean], fontsize=3)
     ax.invert_yaxis()
     ax.set_xlabel('MI (nats)', fontsize=10)
     ax.set_title('Mean ± std\n(dots = each performer)', fontsize=12)
@@ -280,7 +280,7 @@ def run_mi_analysis(df, svara_labels, performers, out_dir: Path) -> None:
     bars = ax.barh(range(len(feats_by_mean)), cv_sorted,
                    color=bar_colors, alpha=0.85, edgecolor='white', linewidth=0.5)
     ax.set_yticks(range(len(feats_by_mean)))
-    ax.set_yticklabels([FEAT_LABELS[f] for f in feats_by_mean], fontsize=10)
+    ax.set_yticklabels([FEAT_LABELS[f] for f in feats_by_mean], fontsize=3)
     ax.invert_yaxis()
     ax.set_xlabel('CV = std / mean  (lower = more consistent)', fontsize=10)
     ax.set_title('Consistency across performers\n(CV)', fontsize=12)
@@ -290,7 +290,7 @@ def run_mi_analysis(df, svara_labels, performers, out_dir: Path) -> None:
     ax.legend(fontsize=8)
     for bar, v in zip(bars, cv_sorted):
         ax.text(v + 0.01, bar.get_y() + bar.get_height() / 2,
-                f'{v:.2f}', va='center', fontsize=8)
+                f'{v:.2f}', va='center', fontsize=3)
 
     fig.suptitle('Step 2 — Per-Performer Consistency of MI(descriptor, svara_label)', fontsize=13)
     plt.tight_layout()
@@ -332,14 +332,14 @@ def run_mi_analysis(df, svara_labels, performers, out_dir: Path) -> None:
     bars = ax.barh(range(len(feats_by_perf)), vals_p, color=bar_cols, alpha=0.85,
                    edgecolor='white', linewidth=0.5)
     ax.set_yticks(range(len(feats_by_perf)))
-    ax.set_yticklabels(names_p, fontsize=10)
+    ax.set_yticklabels(names_p, fontsize=3)
     ax.invert_yaxis()
     ax.set_xlabel('MI (nats)', fontsize=11)
     ax.set_title('MI(descriptor, performer)\n↑ high = performer-dependent', fontsize=12)
     ax.grid(axis='x', alpha=0.3)
     for bar, v in zip(bars, vals_p):
         ax.text(v + 0.002, bar.get_y() + bar.get_height() / 2,
-                f'{v:.3f}', va='center', fontsize=9)
+                f'{v:.3f}', va='center', fontsize=3)
     ax.legend(handles=[
         mpatches.Patch(color=COLOR_STRUCT, label='Structural', alpha=0.85),
         mpatches.Patch(color=COLOR_PITCH,  label='Pitch (cents)', alpha=0.85),
@@ -351,14 +351,14 @@ def run_mi_analysis(df, svara_labels, performers, out_dir: Path) -> None:
     bars_s = ax.barh(range(len(feats_by_perf)), vals_s, color=bar_cols, alpha=0.85,
                      edgecolor='white', linewidth=0.5)
     ax.set_yticks(range(len(feats_by_perf)))
-    ax.set_yticklabels(names_p, fontsize=10)
+    ax.set_yticklabels(names_p, fontsize=3)
     ax.invert_yaxis()
     ax.set_xlabel('MI (nats)', fontsize=11)
     ax.set_title('MI(descriptor, svara_label)\n(same feature order)', fontsize=12)
     ax.grid(axis='x', alpha=0.3)
     for bar, v in zip(bars_s, vals_s):
         ax.text(v + 0.002, bar.get_y() + bar.get_height() / 2,
-                f'{v:.3f}', va='center', fontsize=9)
+                f'{v:.3f}', va='center', fontsize=3)
 
     # ─ Right: scatter MI(svara) vs MI(performer) — invariance map ─
     ax = axes[2]
@@ -461,14 +461,14 @@ def run_mi_analysis(df, svara_labels, performers, out_dir: Path) -> None:
     bars = ax.barh(range(len(feats_ranked)), vals_is, color=bar_c, alpha=0.88,
                    edgecolor='white', linewidth=0.5)
     ax.set_yticks(range(len(feats_ranked)))
-    ax.set_yticklabels(names_r, fontsize=10)
+    ax.set_yticklabels(names_r, fontsize=3)
     ax.invert_yaxis()
     ax.set_xlabel('Invariance score  =  disc_norm × (1 − perf_norm)', fontsize=11)
     ax.set_title('Step 4 — Invariance Score\n(ranked, color = category)', fontsize=12)
     ax.grid(axis='x', alpha=0.3)
     for bar, v in zip(bars, vals_is):
         ax.text(v + 0.003, bar.get_y() + bar.get_height() / 2,
-                f'{v:.3f}', va='center', fontsize=9)
+                f'{v:.3f}', va='center', fontsize=3)
 
     cat_legend = [mpatches.Patch(color=c, label=k, alpha=0.88)
                   for k, c in CAT_COLORS.items()]

@@ -23,7 +23,7 @@ import settings
 from src.pitch_extraction.swiftf0_finetune.dataset import scms_official_split
 
 SCMS_ROOT     = settings.PROJECT_ROOT / "data" / "datasets" / "scms"
-OUT_ROOT      = settings.DATA_INTERIM / "scms_separated"
+OUT_ROOT      = settings.INTERIM_SEP_SCMS
 DEFAULT_MODEL = "model_bs_roformer_ep_317_sdr_12.9755.ckpt"
 
 

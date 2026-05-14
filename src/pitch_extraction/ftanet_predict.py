@@ -48,8 +48,8 @@ from src.pitch_extraction.swiftf0_finetune.dataset import scms_official_split
 MODEL_NAME        = "melody:ftanet-carnatic"
 MODEL_SR          = 8000
 SCMS_AUDIO_DIR    = settings.PROJECT_ROOT / "data" / "datasets" / "scms" / "audio"
-SCMS_SEPARATED_DIR = settings.DATA_INTERIM / "scms_separated"
-SCMS_PITCH_DIR    = settings.DATA_INTERIM / "scms_pitch_ftanet"
+SCMS_SEPARATED_DIR = settings.INTERIM_SEP_SCMS
+SCMS_PITCH_DIR    = settings.INTERIM_PITCH_SCMS / "ftanet"
 
 
 def predict_pitch(
@@ -63,7 +63,7 @@ def predict_pitch(
         raise FileNotFoundError(f"Audio not found: {audio_path}")
 
     if out_path is None:
-        out_dir = settings.DATA_INTERIM / "cv_pitch_ftanet" / suffix / recording_id
+        out_dir = settings.INTERIM_PITCH_CV / "ftanet" / suffix / recording_id
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / f"{recording_id}_{suffix}_ftanet_raw.npy"
 
@@ -178,13 +178,13 @@ def main():
     for recording_id in recordings:
         if args.unet:
             audio_path = (
-                settings.DATA_INTERIM / "source_separation" / "separated"
+                settings.INTERIM_SEP_CV_UNET
                 / recording_id / f"{recording_id}_unet_voice.wav"
             )
             suffix = "unet"
         elif args.as_model:
             audio_path = (
-                settings.DATA_INTERIM / "source_separation_as" / "separated"
+                settings.INTERIM_SEP_CV_AS
                 / recording_id / f"{recording_id}_as_voice.wav"
             )
             suffix = "as"

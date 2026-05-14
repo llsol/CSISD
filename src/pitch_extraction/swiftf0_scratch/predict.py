@@ -34,10 +34,10 @@ import settings
 from src.pitch_extraction.swiftf0_scratch.model import SwiftF0Scratch, HOP, SR
 from src.pitch_extraction.swiftf0_finetune.dataset import scms_official_split
 
-CKPT_DIR             = settings.DATA_INTERIM / "models" / "swiftf0_scratch"
+CKPT_DIR             = settings.SWIFTF0_SCRATCH_DIR
 SCMS_AUDIO_DIR       = settings.PROJECT_ROOT / "data" / "datasets" / "scms" / "audio"
-SCMS_SEPARATED_DIR   = settings.DATA_INTERIM / "scms_separated"
-SCMS_PITCH_DIR       = settings.DATA_INTERIM / "scms_pitch_swiftf0scratch"
+SCMS_SEPARATED_DIR   = settings.INTERIM_SEP_SCMS
+SCMS_PITCH_DIR       = settings.INTERIM_PITCH_SCMS / "swiftf0_scratch"
 CONFIDENCE_THRESHOLD = 0.9
 CHUNK_SEC            = 30.0
 
@@ -78,7 +78,7 @@ def predict_pitch(
     import librosa
 
     if out_path is None:
-        out_dir = settings.DATA_INTERIM / "cv_pitch_swiftf0scratch" / source_suffix / recording_id
+        out_dir = settings.INTERIM_PITCH_CV / "swiftf0_scratch" / source_suffix / recording_id
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / f"{recording_id}_{source_suffix}_swiftf0scratch_raw.npy"
 
@@ -211,13 +211,13 @@ def main():
     for recording_id in recordings:
         if args.unet:
             audio_path = (
-                settings.DATA_INTERIM / "source_separation" / "separated"
+                settings.INTERIM_SEP_CV_UNET
                 / recording_id / f"{recording_id}_unet_voice.wav"
             )
             source_suffix = "unet"
         elif args.as_model:
             audio_path = (
-                settings.DATA_INTERIM / "source_separation_as" / "separated"
+                settings.INTERIM_SEP_CV_AS
                 / recording_id / f"{recording_id}_as_voice.wav"
             )
             source_suffix = "as"

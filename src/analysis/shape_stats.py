@@ -58,7 +58,7 @@ import settings as S
 from src.analysis.svara_segment_analysis import COLORS as PERFORMER_COL, SCALE_ORDER as SVARA_ORDER
 from src.models.curve_vae.fit_sta_tr_curves import _h
 
-INTERIM_DIR = S.DATA_INTERIM / "analysis"
+INTERIM_DIR = S.INTERIM_ANALYSIS
 FIGURES_DIR = S.FIGURES_DIR / "analysis" / "shape_stats"
 
 DUR_ORDER = ["short", "medium", "long"]
@@ -69,7 +69,7 @@ DUR_ORDER = ["short", "medium", "long"]
 def _load_svara_durations() -> pl.DataFrame:
     dfs = []
     for rec in S.SARASUDA_VARNAM:
-        p = S.DATA_INTERIM / rec / "features" / f"{rec}_svara_structural_embeddings.parquet"
+        p = S.INTERIM_RECORDINGS / rec / "features" / f"{rec}_svara_structural_embeddings.parquet"
         if p.exists():
             dfs.append(
                 pl.read_parquet(p)

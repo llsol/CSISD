@@ -33,7 +33,7 @@ sys.path.insert(0, str(ROOT))
 import settings as S
 from src.models.curve_vae.fit_sta_tr_curves import curve_model
 
-FITTED       = S.DATA_INTERIM / "models" / "curve_vae" / "gt_curves_fitted.parquet"
+FITTED       = S.CURVE_VAE_DIR / "gt_curves_fitted.parquet"
 SVARA_LABELS = sorted(['D', 'G', 'M', 'N', 'P', 'R', 'S'])
 MIN_COUNT    = 15
 

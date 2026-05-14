@@ -43,7 +43,7 @@ def plot_embeddings(svara_labels, performers, out_dir: Path) -> None:
             recording_id=rec,
             tonic_hz=S.SARASUDA_TONICS[rec],
             corpus_root=S.DATA_CORPUS,
-            interim_root=S.DATA_INTERIM,
+            interim_root=S.INTERIM_RECORDINGS,
             max_segments=12,
         )
         dfs.append(df_emb)

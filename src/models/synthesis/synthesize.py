@@ -53,18 +53,18 @@ from src.models.gruvae.dataset_gruvae import SVARA_LABELS, SVARA_TO_IDX
 from src.models.gruvae.model_gruvae import ModelConfig, SvaraGRUVAE
 from src.models.curve_vae.cp_vae import CPVAE, CPVAEConfig
 from src.models.curve_vae.sta_tr_model import CurveModel
-from src.models.curve_vae.fit_sta_tr_curves import curve_model as _param_curve_fn
-from src.models.param_gru.model_param_gru import ParamGRUConfig, ParamGRUVAE
+from src.models.curve_vae.fit_sta_tr_curves import curve_model as _param_curve_fn, A_MIN, A_MAX
+from src.models.param_gru.model_param_gru import ParamGRUConfig, ParamGRU, ResidualDist, load_residuals
 from src.models.param_gru.dataset_param_gru import SVARA_TO_IDX as _PARAM_SVARA_IDX
 from src.models.synthesis.ending_pitch_stats import (
     load_stats, load_tr_sil_stats,
     sample_ending_cents, sample_tr_sil_delta,
 )
 
-GRUVAE_DIR    = S.DATA_INTERIM / "models" / "gruvae_v4"
-CPVAE_DIR     = S.DATA_INTERIM / "models" / "curve_vae" / "cp_vae_runs"
-PARAM_GRU_DIR = S.DATA_INTERIM / "models" / "param_gru"
-STA_TR_FIT    = S.DATA_INTERIM / "models" / "curve_vae" / "gt_curves_fitted.parquet"
+GRUVAE_DIR    = S.GRUVAE_DIR
+CPVAE_DIR     = S.CURVE_VAE_DIR / "cp_vae_runs"
+PARAM_GRU_DIR = S.PARAM_GRU_DIR
+STA_TR_FIT    = S.CURVE_VAE_DIR / "gt_curves_fitted.parquet"
 OUT_DIR       = S.FIGURES_DIR / "synthesis"
 
 TYPE_NAMES    = ["CP", "SIL", "STAp", "STAt", "TRa", "TRd"]
@@ -104,22 +104,29 @@ def load_curve_model() -> CurveModel:
     return CurveModel().fit(df_fit)
 
 
-def load_param_gruvae(device: torch.device) -> ParamGRUVAE | None:
-    """Load latest ParamGRUVAE checkpoint, or None if not yet trained."""
+def load_param_gruvae(device: torch.device) -> tuple[ParamGRU | None, dict[str, ResidualDist] | None]:
+    """Load latest ParamGRU checkpoint and residual dists, or (None, None)."""
     runs = sorted(PARAM_GRU_DIR.glob("run_*"))
     if not runs:
-        return None
+        return None, None
     ckpt_path = runs[-1] / "best.pt"
     if not ckpt_path.exists():
-        return None
+        return None, None
     ckpt  = torch.load(ckpt_path, map_location=device)
     known = {f.name for f in dataclasses.fields(ParamGRUConfig)}
     cfg   = ParamGRUConfig(**{k: v for k, v in ckpt["cfg"].items() if k in known})
-    model = ParamGRUVAE(cfg).to(device)
+    model = ParamGRU(cfg).to(device)
     model.load_state_dict(ckpt["model"])
     model.eval()
     print(f"[param_gru] {runs[-1].name}  ep={ckpt['epoch']}")
-    return model
+
+    res_path = runs[-1] / "residuals.npz"
+    dists = load_residuals(res_path) if res_path.exists() else None
+    if dists:
+        print(f"[param_gru] residual dists: {sorted(dists.keys())}")
+    else:
+        print("[param_gru] no residuals.npz — generation will be deterministic")
+    return model, dists
 
 
 # ── structural generation ─────────────────────────────────────────────────────
@@ -129,19 +136,14 @@ def _generate_structure(
     svara_label:   str,
     n:             int,
     device:        torch.device,
-    total_dur_sec: float | None,
     use_hard_mask: bool,
 ) -> list[dict]:
     """Returns list of n svara dicts, each with 'segments' list."""
     idx_t = torch.tensor([SVARA_TO_IDX[svara_label]] * n, dtype=torch.long, device=device)
-    dur_t = (
-        torch.full((n,), float(total_dur_sec), dtype=torch.float32, device=device)
-        if total_dur_sec is not None else None
-    )
     with torch.no_grad():
         out = gruvae.generate(
             batch_size=n, svara_idx=idx_t, device=device,
-            total_dur=dur_t, use_hard_mask=use_hard_mask,
+            use_hard_mask=use_hard_mask,
         )
     gen       = out["generated"]
     pred_lens = out["pred_length"].float().cpu()
@@ -156,7 +158,7 @@ def _generate_structure(
         for s in segs:
             typ   = TYPE_NAMES[int(np.argmax(s[:gruvae.cfg.type_dim]))]
             cents = 0.0 if typ in ("SIL", "TRa", "TRd") else float(s[gruvae.cfg.type_dim + 1]) * 1200.0
-            segments.append({"type": typ, "dur_rel": float(s[gruvae.cfg.type_dim]), "cents": cents})
+            segments.append({"type": typ, "dur_abs_sec": float(s[gruvae.cfg.type_dim]), "cents": cents})
         results.append({"svara": svara_label, "segments": segments})
     return results
 
@@ -169,11 +171,31 @@ def _resample(arr: np.ndarray, n: int) -> np.ndarray:
     return np.interp(np.linspace(0, 1, n), np.linspace(0, 1, len(arr)), arr)
 
 
+# ── pitch anchor helper ───────────────────────────────────────────────────────
+
+def _sample_start_cents(
+    df_curves: pl.DataFrame,
+    svara: str,
+    seg_type: str,
+    rng: np.random.Generator,
+) -> float:
+    """Sample starting pitch from GT p_start_cents for (svara, seg_type)."""
+    sub = df_curves.filter(
+        (pl.col("svara_label") == svara) & (pl.col("seg_type") == seg_type)
+    )["p_start_cents"].drop_nulls().to_numpy()
+    if len(sub) == 0:
+        sub = df_curves.filter(
+            pl.col("seg_type") == seg_type
+        )["p_start_cents"].drop_nulls().to_numpy()
+    if len(sub) == 0:
+        return 0.0
+    return float(rng.choice(sub))
+
+
 # ── full svara synthesis ──────────────────────────────────────────────────────
 
 def synthesize_svara(
     svara_label:   str,
-    total_dur_sec: float,
     gruvae:        SvaraGRUVAE,
     cpvae:         CPVAE,
     scale:         float,
@@ -184,7 +206,9 @@ def synthesize_svara(
     use_hard_mask: bool = True,
     rng:           np.random.Generator | None = None,
     verbose:       bool = False,
-    param_gruvae:  ParamGRUVAE | None = None,
+    param_gruvae:    ParamGRU | None = None,
+    residual_dists:  dict | None = None,
+    df_curves:       pl.DataFrame | None = None,
 ) -> tuple[np.ndarray, list[dict]]:
     """
     Generate one svara pitch contour (four phases).
@@ -204,11 +228,10 @@ def synthesize_svara(
         rng = np.random.default_rng()
 
     # ── structural sequence ──────────────────────────────────────────────────
-    structures = _generate_structure(gruvae, svara_label, 1, device, total_dur_sec, use_hard_mask)
+    structures = _generate_structure(gruvae, svara_label, 1, device, use_hard_mask)
     segs       = [dict(s) for s in structures[0]["segments"]]
-    total_rel  = sum(s["dur_rel"] for s in segs) or 1.0
     for s in segs:
-        s["dur_sec"] = s["dur_rel"] / total_rel * total_dur_sec
+        s["dur_sec"] = s["dur_abs_sec"]
 
     # ── phase 1: generate all CP curves ─────────────────────────────────────
     sv_t = torch.tensor([SVARA_TO_IDX[svara_label]], dtype=torch.long, device=device)
@@ -226,7 +249,17 @@ def synthesize_svara(
         cp_curves[i] = seg["cents"] + _resample(dev64, n)
 
     # ── phase 2: resolve endpoints for all segments ──────────────────────────
-    prev_end = 0.0
+    # Initialise prev_end from GT start-pitch distribution for the first
+    # non-CP, non-SIL segment (avoids the unrealistic 0 ¢ anchor).
+    _first_voiced = next(
+        (s for s in segs if s["type"] not in ("SIL", "CP")), None
+    )
+    prev_end = (
+        _sample_start_cents(df_curves, svara_label, _first_voiced["type"], rng)
+        if (df_curves is not None and _first_voiced is not None)
+        else 0.0
+    )
+
     for i, seg in enumerate(segs):
         next_seg = segs[i + 1] if i + 1 < len(segs) else None
         is_last  = next_seg is None
@@ -234,7 +267,20 @@ def synthesize_svara(
         if seg["type"] == "SIL":
             seg["start_cents"] = 0.0
             seg["end_cents"]   = 0.0
-            prev_end = 0.0
+            # After silence the pitch restarts — sample from GT distribution
+            # for whichever voiced segment comes next.
+            _next_voiced = next(
+                (segs[j] for j in range(i + 1, len(segs))
+                 if segs[j]["type"] != "SIL"), None
+            )
+            if (df_curves is not None
+                    and _next_voiced is not None
+                    and _next_voiced["type"] != "CP"):
+                prev_end = _sample_start_cents(
+                    df_curves, svara_label, _next_voiced["type"], rng
+                )
+            else:
+                prev_end = 0.0
 
         elif seg["type"] == "CP":
             curve = cp_curves[i]
@@ -288,15 +334,17 @@ def synthesize_svara(
 
         with torch.no_grad():
             result = param_gruvae.generate(
-                seg_type_oh = torch.from_numpy(seg_oh).to(device),
-                dur_rel     = torch.from_numpy(dur_rel_t).to(device),
-                delta_norm  = torch.from_numpy(delta_n).to(device),
-                dur_sec     = torch.from_numpy(dur_sec_t).to(device),
-                delta_cents = torch.from_numpy(delta_c).to(device),
-                sta_tr_mask = torch.from_numpy(sta_tr_m).to(device),
-                lengths     = torch.tensor([n_segs], device=device),
-                svara_idx   = torch.tensor([_PARAM_SVARA_IDX[svara_label]], device=device),
-                total_dur   = torch.tensor([total_dur], device=device),
+                seg_type_oh    = torch.from_numpy(seg_oh).to(device),
+                dur_rel        = torch.from_numpy(dur_rel_t).to(device),
+                delta_norm     = torch.from_numpy(delta_n).to(device),
+                dur_sec        = torch.from_numpy(dur_sec_t).to(device),
+                delta_cents    = torch.from_numpy(delta_c).to(device),
+                sta_tr_mask    = torch.from_numpy(sta_tr_m).to(device),
+                lengths        = torch.tensor([n_segs], device=device),
+                svara_idx      = torch.tensor([_PARAM_SVARA_IDX[svara_label]], device=device),
+                total_dur      = torch.tensor([total_dur], device=device),
+                residual_dists = residual_dists,
+                rng            = rng,
             )
         params = result["params"][0]  # (n_segs, 3)
         k_all, s_all, A_all = param_gruvae.decode_params(params)
@@ -326,9 +374,10 @@ def synthesize_svara(
             all_curves.append(cp_curves[i])
 
         elif seg["type"] in ("STAp", "STAt", "TRa", "TRd"):
-            start = seg["start_cents"]
-            end   = seg["end_cents"]
-            delta = end - start
+            start    = seg["start_cents"]
+            end      = seg["end_cents"]
+            delta    = end - start
+            next_seg = segs[i + 1] if i + 1 < len(segs) else None
             if i in seg_params and abs(delta) > 1e-6:
                 k, s, A = seg_params[i]
                 t    = np.linspace(0.0, 1.0, n)
@@ -363,7 +412,8 @@ def _plot_one(ax: plt.Axes, pitch: np.ndarray, segments: list[dict], title: str)
     ax.set_xlabel("time (s)", fontsize=7)
     ax.set_ylabel("cents", fontsize=7)
     ax.tick_params(labelsize=6)
-    ax.set_title(title, fontsize=8)
+    total_dur = sum(s["dur_sec"] for s in segments)
+    ax.set_title(f"{title}  [{total_dur:.2f}s]", fontsize=8)
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
@@ -373,8 +423,6 @@ def main() -> None:
     parser.add_argument("--svara",     default="S",  choices=SVARA_LABELS)
     parser.add_argument("--all",       action="store_true")
     parser.add_argument("--n",         type=int,   default=2)
-    parser.add_argument("--dur",       type=float, default=1.0,
-                        help="Total svara duration in seconds")
     parser.add_argument("--run",       default=None, help="GRU+VAE run dir")
     parser.add_argument("--no-hard-mask", dest="hard_mask", action="store_false",
                         help="Disable grammar mask (default: mask ON)")
@@ -386,13 +434,14 @@ def main() -> None:
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    gruvae        = load_gruvae(args.run, device)
-    cpvae, scale  = load_cpvae(device)
-    curve_model   = load_curve_model()
-    param_gruvae  = load_param_gruvae(device)
-    ending_stats  = load_stats()
-    tr_sil_stats  = load_tr_sil_stats()
-    rng           = np.random.default_rng(42)
+    gruvae                  = load_gruvae(args.run, device)
+    cpvae, scale            = load_cpvae(device)
+    curve_model             = load_curve_model()
+    param_gruvae, res_dists = load_param_gruvae(device)
+    ending_stats            = load_stats()
+    tr_sil_stats            = load_tr_sil_stats()
+    df_curves               = pl.read_parquet(STA_TR_FIT) if STA_TR_FIT.exists() else None
+    rng                     = np.random.default_rng(42)
 
     if param_gruvae is None:
         print("[param_gru] no checkpoint found — falling back to CurveModel Gaussian sampling")
@@ -407,7 +456,6 @@ def main() -> None:
         for c in range(n_cols):
             pitch, segs = synthesize_svara(
                 svara_label=svara,
-                total_dur_sec=args.dur,
                 gruvae=gruvae,
                 cpvae=cpvae,
                 scale=scale,
@@ -419,6 +467,8 @@ def main() -> None:
                 rng=rng,
                 verbose=args.verbose,
                 param_gruvae=param_gruvae,
+                residual_dists=res_dists,
+                df_curves=df_curves,
             )
             seg_str = " ".join(s["type"] for s in segs)
             _plot_one(axes[r][c], pitch, segs, f"{svara} #{c+1} [{seg_str}]")
@@ -431,7 +481,7 @@ def main() -> None:
                bbox_to_anchor=(0.5, -0.02))
 
     fig.suptitle(
-        f"Synthesis — svara {'all' if args.all else args.svara}  dur={args.dur}s",
+        f"Synthesis — svara {'all' if args.all else args.svara}",
         fontsize=10, fontweight="bold",
     )
     plt.tight_layout(rect=[0, 0.04, 1, 1])

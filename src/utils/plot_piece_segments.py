@@ -248,14 +248,15 @@ def plot_piece_structural_segments(
     recording_id: str,
     tonic_hz: float,
     corpus_root: Path | str = "data/corpus",
-    interim_root: Path | str = "data/interim",
+    interim_root: Path | str | None = None,
     annotation_path: Path | str | None = None,
     figsize: tuple[int, int] = (36, 5),
     show_peaks: bool = True,
 ) -> plt.Figure:
     """Single panel: svara-based segmentation."""
     corpus_root  = Path(corpus_root)
-    interim_root = Path(interim_root)
+    import settings as _S
+    interim_root = _S.INTERIM_RECORDINGS if interim_root is None else Path(interim_root)
 
     df_pitch, df_peaks, df_svaras, peak_row_map = _load_data(
         recording_id, tonic_hz, corpus_root, interim_root,
@@ -278,14 +279,15 @@ def plot_piece_both_segmentations(
     recording_id: str,
     tonic_hz: float,
     corpus_root: Path | str = "data/corpus",
-    interim_root: Path | str = "data/interim",
+    interim_root: Path | str | None = None,
     annotation_path: Path | str | None = None,
     figsize: tuple[int, int] = (36, 9),
     show_peaks: bool = True,
 ) -> plt.Figure:
     """Two stacked panels: global segmentation (top) vs svara-based (bottom)."""
     corpus_root  = Path(corpus_root)
-    interim_root = Path(interim_root)
+    import settings as _S
+    interim_root = _S.INTERIM_RECORDINGS if interim_root is None else Path(interim_root)
 
     df_pitch, df_peaks, df_svaras, peak_row_map = _load_data(
         recording_id, tonic_hz, corpus_root, interim_root,

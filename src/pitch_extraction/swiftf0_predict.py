@@ -48,8 +48,8 @@ FMIN                 = 46.875
 FMAX                 = 2093.75
 MODEL_SR             = 16000
 SCMS_AUDIO_DIR       = settings.PROJECT_ROOT / "data" / "datasets" / "scms" / "audio"
-SCMS_SEPARATED_DIR   = settings.DATA_INTERIM / "scms_separated"
-SCMS_PITCH_DIR       = settings.DATA_INTERIM / "scms_pitch_swiftf0"
+SCMS_SEPARATED_DIR   = settings.INTERIM_SEP_SCMS
+SCMS_PITCH_DIR       = settings.INTERIM_PITCH_SCMS / "swiftf0"
 
 
 def _find_corpus_audio(recording_id: str) -> Path:
@@ -163,13 +163,13 @@ def main():
     for recording_id in recordings:
         if args.unet:
             audio_path = (
-                settings.DATA_INTERIM / "source_separation" / "separated"
+                settings.INTERIM_SEP_CV_UNET
                 / recording_id / f"{recording_id}_unet_voice.wav"
             )
             suffix = "unet"
         elif args.as_model:
             audio_path = (
-                settings.DATA_INTERIM / "source_separation_as" / "separated"
+                settings.INTERIM_SEP_CV_AS
                 / recording_id / f"{recording_id}_as_voice.wav"
             )
             suffix = "as"
@@ -177,7 +177,7 @@ def main():
             audio_path = _find_corpus_audio(recording_id)
             suffix = "original"
 
-        out_path = (settings.DATA_INTERIM / "cv_pitch_swiftf0"
+        out_path = (settings.INTERIM_PITCH_CV / "swiftf0"
                     / suffix / recording_id
                     / f"{recording_id}_{suffix}_swiftf0_raw.npy")
         print(f"\n── {recording_id}  [{suffix}] ──")
