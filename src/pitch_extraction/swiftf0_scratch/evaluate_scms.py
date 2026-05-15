@@ -31,7 +31,9 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -43,6 +45,7 @@ sys.path.insert(0, str(ROOT))
 import settings
 from src.pitch_extraction.swiftf0_finetune.dataset import scms_official_split
 
+RESULTS_DIR        = settings.RESULTS_DIR / "scms_eval"
 SCMS_ROOT          = settings.PROJECT_ROOT / "data" / "datasets" / "scms"
 SEP_ROOT           = settings.INTERIM_SEP_SCMS
 PITCH_ROOT_FTANET  = settings.INTERIM_PITCH_SCMS / "ftanet"
@@ -99,7 +102,7 @@ def load_swiftf0(model_type: str, run_name: str | None, device: torch.device):
     model.load_state_dict(ckpt["model"])
     model.eval()
     print(f"  [{model_type}] epoch={ckpt['epoch']}  val={ckpt.get('best_val', '?'):.4f}  {best}")
-    return model
+    return model, run_dir.name
 
 def load_cached_swiftf0(model_type: str, stem: str, source: str) -> tuple[np.ndarray, np.ndarray] | None:
     if model_type == "finetune":
@@ -179,7 +182,8 @@ def evaluate(
 
 def apply_threshold(pitch: np.ndarray, conf: np.ndarray, thr: float) -> np.ndarray:
     out = pitch.copy()
-    out[conf < thr] = 0.0
+    has_conf = ~np.isnan(conf)
+    out[has_conf & (conf < thr)] = 0.0
     return out
 
 
@@ -197,6 +201,36 @@ def print_row(label: str, source: str, scores: dict, note: str = ""):
     rca = scores.get("Raw Chroma Accuracy", scores.get("RCA", 0))
     oa  = scores.get("Overall Accuracy",    scores.get("OA",  0))
     print(f"  {label:<26} {source:<8}  {vr:6.2f}  {vfa:6.2f}  {rpa:6.2f}  {rca:6.2f}  {oa:6.2f}  {note}")
+
+
+# ── logging ───────────────────────────────────────────────────────────────────
+
+def save_results(
+    args,
+    run_scratch: str,
+    run_fine: str,
+    n_stems: int,
+    results: list[dict],
+) -> Path:
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    thr_tag = "sweep" if (args.sweep or args.sweep_all) else f"thr{args.thr:.2f}"
+    fname = f"scms_eval_{ts}_{thr_tag}.json"
+    out = {
+        "timestamp":        ts,
+        "n_stems_per_source": n_stems,
+        "threshold":   args.thr if not (args.sweep or args.sweep_all) else None,
+        "sweep":       args.sweep or args.sweep_all,
+        "sources":     args.sources,
+        "run_scratch": run_scratch,
+        "run_fine":    run_fine,
+        "paper_baselines": PAPER_BASELINE,
+        "results":     results,
+    }
+    path = RESULTS_DIR / fname
+    path.write_text(json.dumps(out, indent=2))
+    print(f"\n[eval] Results saved → {path}")
+    return path
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
@@ -236,9 +270,9 @@ def main():
     from src.pitch_extraction.swiftf0_scratch.model import SR as SR_SC,   HOP as HOP_SC
 
     print("\n[eval] Loading SwiftF0-finetune ...")
-    model_fine = load_swiftf0("finetune", args.run_fine, device)
+    model_fine, run_fine_name = load_swiftf0("finetune", args.run_fine, device)
     print("[eval] Loading SwiftF0-scratch ...")
-    model_sc   = load_swiftf0("scratch",  args.run_scratch, device)
+    model_sc, run_scratch_name = load_swiftf0("scratch",  args.run_scratch, device)
 
     # collect predictions per (extractor, source)
     SYSTEMS = [
@@ -267,100 +301,59 @@ def main():
             print(f"  [FTANet/{source}] {n_missing}/{len(test_stems)} stems missing cache")
         predictions[("ftanet", source)] = (ftanet_t, ftanet_f, None)
 
-        # SwiftF0-finetune
-        if args.cached:
-            fine_t, fine_p = [], []
-            n_missing = 0
-
-            for stem in test_stems:
-                res = load_cached_swiftf0("finetune", stem, source)
-                if res is None:
-                    n_missing += 1
-                    fine_t.append(np.array([]))
-                    fine_p.append(np.array([]))
-                else:
-                    fine_t.append(res[0])
-                    fine_p.append(res[1])
-
-            if n_missing:
-                print(f"  [finetune/{source}] {n_missing}/{len(test_stems)} stems missing cache")
-
-            predictions[("finetune", source)] = (fine_t, fine_p, None)
-
-        else:
-            fine_t, fine_p, fine_c = [], [], []
+        # SwiftF0-finetune and SwiftF0-scratch: cached → live fallback per stem
+        for (model_type, model, sr, hop, label) in [
+            ("finetune", model_fine, SR_FINE, HOP_FINE, "finetune"),
+            ("scratch",  model_sc,  SR_SC,   HOP_SC,   "scratch"),
+        ]:
+            est_t, est_p, est_c = [], [], []
+            n_cached = n_live = n_missing = 0
             for i, stem in enumerate(test_stems):
-                wav = swiftf0_audio_path(stem, source)
-                if not wav.exists():
-                    fine_t.append(np.array([])); fine_p.append(np.array([])); fine_c.append(np.array([]))
-                    continue
-                if (i + 1) % 20 == 0 or i == 0:
-                    print(f"  [finetune/{source}] {i+1}/{len(test_stems)}", end="\r", flush=True)
-                t, p, c = infer_swiftf0(model_fine, wav, device, SR_FINE, HOP_FINE)
-                fine_t.append(t); fine_p.append(p); fine_c.append(c)
-
-            print(f"  [finetune/{source}] done            ")
-            predictions[("finetune", source)] = (fine_t, fine_p, fine_c)
-
-        # SwiftF0-scratch
-        if args.cached:
-            sc_t, sc_p = [], []
-            n_missing = 0
-
-            for stem in test_stems:
-                res = load_cached_swiftf0("scratch", stem, source)
-                if res is None:
+                res = None if (args.sweep or args.sweep_all) else load_cached_swiftf0(model_type, stem, source)
+                if res is not None:
+                    t, p = res
+                    est_t.append(t)
+                    est_p.append(p)
+                    est_c.append(np.full(len(p), np.nan))
+                    n_cached += 1
+                elif args.cached:
+                    est_t.append(np.array([])); est_p.append(np.array([])); est_c.append(np.array([]))
                     n_missing += 1
-                    sc_t.append(np.array([]))
-                    sc_p.append(np.array([]))
                 else:
-                    sc_t.append(res[0])
-                    sc_p.append(res[1])
+                    wav = swiftf0_audio_path(stem, source)
+                    if not wav.exists():
+                        est_t.append(np.array([])); est_p.append(np.array([])); est_c.append(np.array([]))
+                        n_missing += 1
+                        continue
+                    if (i + 1) % 20 == 0 or i == 0:
+                        print(f"  [{label}/{source}] {i+1}/{len(test_stems)}", end="\r", flush=True)
+                    t, p, c = infer_swiftf0(model, wav, device, sr, hop)
+                    est_t.append(t); est_p.append(p); est_c.append(c)
+                    n_live += 1
 
+            parts = [f"cached={n_cached}", f"live={n_live}"]
             if n_missing:
-                print(f"  [scratch/{source}] {n_missing}/{len(test_stems)} stems missing cache")
+                parts.append(f"missing={n_missing}")
+            print(f"  [{label}/{source}] {', '.join(parts)}        ")
+            predictions[(label, source)] = (est_t, est_p, est_c)
 
-            predictions[("scratch", source)] = (sc_t, sc_p, None)
-
-        else:
-            sc_t, sc_p, sc_c = [], [], []
-            for i, stem in enumerate(test_stems):
-                wav = swiftf0_audio_path(stem, source)
-                if not wav.exists():
-                    sc_t.append(np.array([])); sc_p.append(np.array([])); sc_c.append(np.array([]))
-                    continue
-                if (i + 1) % 20 == 0 or i == 0:
-                    print(f"  [scratch/{source}] {i+1}/{len(test_stems)}", end="\r", flush=True)
-                t, p, c = infer_swiftf0(model_sc, wav, device, SR_SC, HOP_SC)
-                sc_t.append(t); sc_p.append(p); sc_c.append(c)
-
-            print(f"  [scratch/{source}] done             ")
-            predictions[("scratch", source)] = (sc_t, sc_p, sc_c)
-
-    # discard stems missing in any system/source so all models score on the same set
+    # discard stems missing in ≥1 system, computed per source independently
     n_total = len(test_stems)
-    valid = np.ones(n_total, dtype=bool)
-    for est_t, _, _ in predictions.values():
-        for i, t in enumerate(est_t):
-            if len(t) == 0:
-                valid[i] = False
 
-    n_discarded = int((~valid).sum())
-    if n_discarded:
+    valid_per_source: dict[str, list[int]] = {}
+    for source in args.sources:
+        valid = np.ones(n_total, dtype=bool)
+        for key in [s[1] for s in SYSTEMS]:
+            est_t, _, _ = predictions[(key, source)]
+            for i, t in enumerate(est_t):
+                if len(t) == 0:
+                    valid[i] = False
         keep = [i for i, v in enumerate(valid) if v]
-        print(f"\n[eval] Discarding {n_discarded} stems missing in ≥1 system — "
-              f"evaluating on {len(keep)}/{n_total}")
-        test_stems = [test_stems[i] for i in keep]
-        ref_times  = [ref_times[i]  for i in keep]
-        ref_freqs  = [ref_freqs[i]  for i in keep]
-        predictions = {
-            k: (
-                [v[0][i] for i in keep],
-                [v[1][i] for i in keep],
-                ([v[2][i] for i in keep] if v[2] is not None else None),
-            )
-            for k, v in predictions.items()
-        }
+        n_disc = n_total - len(keep)
+        if n_disc:
+            print(f"\n[eval] [{source}] Discarding {n_disc} stems missing in ≥1 system — "
+                  f"evaluating on {len(keep)}/{n_total}")
+        valid_per_source[source] = keep
 
     # print results
     sep = print_header()
@@ -371,17 +364,31 @@ def main():
     do_sweep   = args.sweep or args.sweep_all
     thresholds = THRESHOLDS_SWEEP if do_sweep else [args.thr]
 
+    log_entries: list[dict] = []
+
     for source in args.sources:
+        keep      = valid_per_source[source]
+        src_ref_t = [ref_times[i] for i in keep]
+        src_ref_f = [ref_freqs[i] for i in keep]
+        src_stems = [test_stems[i] for i in keep]
+
         for extractor_label, key in SYSTEMS:
-            est_t, est_p, est_c = predictions[(key, source)]
+            raw_t, raw_p, raw_c = predictions[(key, source)]
+            est_t = [raw_t[i] for i in keep]
+            est_p = [raw_p[i] for i in keep]
+            est_c = [raw_c[i] for i in keep] if raw_c is not None else None
 
             if do_sweep and est_c is not None:
                 best_oa, best_scores, best_thr = -1.0, {}, args.thr
                 for thr in thresholds:
                     est_f = [apply_threshold(p, c, thr) for p, c in zip(est_p, est_c)]
-                    sc = evaluate(ref_times, ref_freqs, est_t, est_f)
+                    sc = evaluate(src_ref_t, src_ref_f, est_t, est_f)
                     if args.sweep_all:
                         print_row(extractor_label, source, sc, note=f"thr={thr:.2f}")
+                        log_entries.append({
+                            "system": extractor_label, "source": source,
+                            "threshold": thr, "best": False, **sc,
+                        })
                     if sc.get("Overall Accuracy", 0) > best_oa:
                         best_oa, best_scores, best_thr = sc["Overall Accuracy"], sc, thr
                 if args.sweep_all:
@@ -391,18 +398,30 @@ def main():
                 else:
                     print_row(extractor_label, source, best_scores,
                               note=f"← best thr={best_thr:.2f}")
+                log_entries.append({
+                    "system": extractor_label, "source": source,
+                    "threshold": best_thr, "best": True, **best_scores,
+                })
             else:
                 thr = args.thr
                 est_f = [apply_threshold(p, c, thr) for p, c in zip(est_p, est_c)] \
                         if est_c is not None else list(est_p)
-                sc = evaluate(ref_times, ref_freqs, est_t, est_f)
+                sc = evaluate(src_ref_t, src_ref_f, est_t, est_f)
                 thr_note = "" if key == "ftanet" else f"thr={thr:.2f}"
                 print_row(extractor_label, source, sc, note=thr_note)
+                log_entries.append({
+                    "system": extractor_label, "source": source,
+                    "threshold": None if key == "ftanet" else thr,
+                    "best": None, **sc,
+                })
 
         if source != args.sources[-1]:
             print()
 
     print(f"{sep}\n")
+
+    n_stems_per_source = {src: len(keep) for src, keep in valid_per_source.items()}
+    save_results(args, run_scratch_name, run_fine_name, n_stems_per_source, log_entries)
 
 
 if __name__ == "__main__":

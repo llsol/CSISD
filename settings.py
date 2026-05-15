@@ -11,6 +11,7 @@ DATA_INTERIM   = PROJECT_ROOT / "data" / "interim"
 DATA_PROCESSED = PROJECT_ROOT / "data" / "processed"
 
 FIGURES_DIR    = PROJECT_ROOT / "figures"
+RESULTS_DIR    = PROJECT_ROOT / "data" / "results"
 
 INTERIM_RECORDINGS  = DATA_INTERIM / "recordings"
 INTERIM_PITCH_CV    = DATA_INTERIM / "pitch_predictions" / "cv"

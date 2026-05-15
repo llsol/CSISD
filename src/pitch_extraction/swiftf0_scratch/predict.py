@@ -2,12 +2,13 @@
 Pitch extraction with SwiftF0-scratch (trained from scratch on SCMS Carnatic).
 
 Corpus mode — writes per recording:
-    data/interim/cv_pitch_swiftf0scratch/{source}/{id}/{id}_{source}_swiftf0scratch-{thr}_raw.npy
+    data/interim/pitch_predictions/cv/swiftf0_scratch/{source}/{id}/{id}_{source}_swiftf0scratch_raw.npy
+    Shape: (N, 3) — col 0: time_sec, col 1: f0_Hz (raw, not zeroed), col 2: confidence
+    (3-col format allows interactive threshold exploration in compare_pitch.py)
 
 SCMS mode (--scms) — writes per fragment:
-    data/interim/scms_pitch_swiftf0scratch/{source}/{fragment}_{source}_swiftf0-scratch_raw.npy
-
-Shape of every .npy: (N, 2) — col 0: time_sec, col 1: f0_Hz (0.0 = unvoiced)
+    data/interim/pitch_predictions/scms/swiftf0_scratch/{source}/{fragment}_{source}_swiftf0-scratch_raw.npy
+    Shape: (N, 2) — col 0: time_sec, col 1: f0_Hz (0.0 = unvoiced at --thr)
 
 Usage:
     python -m src.pitch_extraction.swiftf0_scratch.predict srs_v1_svd_sav
@@ -77,7 +78,8 @@ def predict_pitch(
 ) -> Path:
     import librosa
 
-    if out_path is None:
+    corpus_mode = out_path is None
+    if corpus_mode:
         out_dir = settings.INTERIM_PITCH_CV / "swiftf0_scratch" / source_suffix / recording_id
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / f"{recording_id}_{source_suffix}_swiftf0scratch_raw.npy"
@@ -87,7 +89,7 @@ def predict_pitch(
     print(f"[swiftf0scratch] duration: {len(audio)/SR:.1f} s")
 
     chunk_samples = int(CHUNK_SEC * SR)
-    all_times, all_f0 = [], []
+    all_times, all_f0_raw, all_conf = [], [], []
     time_offset = 0.0
     hop_sec     = HOP / SR
 
@@ -103,24 +105,33 @@ def predict_pitch(
 
             n_frames = len(pitch_hz)
             times    = time_offset + np.arange(n_frames) * hop_sec
-            voiced   = confidence >= thr
-            f0_out   = pitch_hz.copy()
-            f0_out[~voiced] = 0.0
 
             all_times.append(times)
-            all_f0.append(f0_out)
+            all_f0_raw.append(pitch_hz)
+            all_conf.append(confidence)
             time_offset += n_frames * hop_sec
 
     times_cat = np.concatenate(all_times)
-    f0_cat    = np.concatenate(all_f0)
-    pitch     = np.column_stack([times_cat, f0_cat]).astype(np.float64)
-    np.save(out_path, pitch)
+    f0_raw    = np.concatenate(all_f0_raw)
+    conf_cat  = np.concatenate(all_conf)
 
+    # Corpus mode: 3-col (time, f0_raw, conf) — compare_pitch.py applies threshold interactively.
+    # SCMS mode:   2-col (time, f0_thresholded) — evaluate_scms.py expects this format.
+    if corpus_mode:
+        data = np.column_stack([times_cat, f0_raw, conf_cat]).astype(np.float64)
+    else:
+        f0_out = f0_raw.copy()
+        f0_out[conf_cat < thr] = 0.0
+        data = np.column_stack([times_cat, f0_out]).astype(np.float64)
+
+    np.save(out_path, data)
+
+    f0_cat   = f0_raw.copy(); f0_cat[conf_cat < thr] = 0.0
     n_voiced = (f0_cat > 0).sum()
     print(
-        f"[swiftf0scratch] {len(pitch):,} frames  "
+        f"[swiftf0scratch] {len(data):,} frames  "
         f"({times_cat[-1]:.1f} s)  "
-        f"voiced: {n_voiced:,} ({n_voiced/len(pitch)*100:.1f}%)  "
+        f"voiced: {n_voiced:,} ({n_voiced/len(data)*100:.1f}%)  "
         f"conf_thr={thr}"
     )
     print(f"[swiftf0scratch] checkpoint: {checkpoint}")
