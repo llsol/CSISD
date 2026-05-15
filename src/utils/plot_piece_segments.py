@@ -321,7 +321,7 @@ if __name__ == "__main__":
         description="Plot full-piece structural segments."
     )
     parser.add_argument("--recording", default=None,
-                        help="Recording ID (default: first in SARASUDA_VARNAM)")
+                        help="Recording ID (default: first in RECORDING_SELECTION)")
     parser.add_argument("--both",  action="store_true",
                         help="Show both segmentation strategies (two panels)")
     parser.add_argument("--all",   action="store_true",
@@ -337,8 +337,8 @@ if __name__ == "__main__":
             matplotlib.use("Agg")
         out_dir = S.FIGURES_DIR / "structural_segments"
         out_dir.mkdir(parents=True, exist_ok=True)
-        for rec_id in S.SARASUDA_VARNAM:
-            tonic = S.SARASUDA_TONICS[rec_id]
+        for rec_id in S.RECORDING_SELECTION:
+            tonic = S.RECORDING_SELECTION_TONICS[rec_id]
             print(f"Plotting {rec_id} …")
             fig = plot_piece_both_segmentations(rec_id, tonic)
             out = out_dir / f"{rec_id}_both.png"
@@ -346,8 +346,8 @@ if __name__ == "__main__":
             print(f"  → {out}")
             plt.show() if args.show else plt.close(fig)
     else:
-        rec_id = args.recording or S.SARASUDA_VARNAM[0]
-        tonic  = S.SARASUDA_TONICS[rec_id]
+        rec_id = args.recording or S.RECORDING_SELECTION[0]
+        tonic  = S.RECORDING_SELECTION_TONICS[rec_id]
         print(f"Plotting {rec_id} …")
         plot_fn = plot_piece_both_segmentations if args.both else plot_piece_structural_segments
         fig = plot_fn(rec_id, tonic)

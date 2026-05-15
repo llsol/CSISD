@@ -1,7 +1,7 @@
 import numpy as np
 import polars as pl
 import settings as S
-from settings import SARASUDA_VARNAM
+from settings import RECORDING_SELECTION
 from pathlib import Path
 
 from src.io.pitch_io import load_pitch_file
@@ -51,7 +51,7 @@ def feature_extraction_one_recording(
     return df_features
 
 
-def feature_extraction_all_recordings(recording_ids: list = SARASUDA_VARNAM):
+def feature_extraction_all_recordings(recording_ids: list = RECORDING_SELECTION):
     for recording_id in recording_ids:
         print(f" Feature extraction {recording_id}...")
         feature_extraction_one_recording(recording_id=recording_id)

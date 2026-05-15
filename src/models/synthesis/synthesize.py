@@ -88,7 +88,7 @@ SYNTH_SR      = 200   # output samples per second
 
 # ── model loading ─────────────────────────────────────────────────────────────
 
-def load_gruvae(run: str | None, device: torch.device) -> SvaraGRUVAE:
+def load_gruvae(run: str | None, device: torch.device) -> tuple[SvaraGRUVAE, str]:
     run_dir = (GRUVAE_DIR / run) if run else sorted(GRUVAE_DIR.glob("run_*"))[-1]
     ckpt    = torch.load(run_dir / "best.pt", map_location=device)
     known   = {f.name for f in dataclass_fields(ModelConfig)}
@@ -97,11 +97,12 @@ def load_gruvae(run: str | None, device: torch.device) -> SvaraGRUVAE:
     model   = SvaraGRUVAE(cfg).to(device)
     model.load_state_dict(ckpt["model"])
     model.eval()
+    tag = f"gruvae:{run_dir.name}/ep{ckpt['epoch']}"
     print(f"[gruvae]   {run_dir.name}  ep={ckpt['epoch']}")
-    return model
+    return model, tag
 
 
-def load_cpvae(device: torch.device) -> tuple[CPVAE, float]:
+def load_cpvae(device: torch.device) -> tuple[CPVAE, float, str]:
     run_dir = sorted(CPVAE_DIR.glob("run_*"))[-1]
     best    = run_dir / "best.pt"
     ckpt    = torch.load(best, map_location=device)
@@ -109,8 +110,9 @@ def load_cpvae(device: torch.device) -> tuple[CPVAE, float]:
     model.load_state_dict(ckpt["model"])
     model.eval()
     scale = float(ckpt["scale"])
+    tag   = f"cpvae:{run_dir.name}/ep{ckpt['epoch']}"
     print(f"[cp_vae]   {run_dir.name}  ep={ckpt['epoch']}  scale={scale:.2f}¢")
-    return model, scale
+    return model, scale, tag
 
 
 def load_curve_model() -> CurveModel:
@@ -118,20 +120,21 @@ def load_curve_model() -> CurveModel:
     return CurveModel().fit(df_fit)
 
 
-def load_param_gruvae(device: torch.device) -> tuple[ParamGRU | None, dict[str, ResidualDist] | None]:
-    """Load latest ParamGRU checkpoint and residual dists, or (None, None)."""
+def load_param_gruvae(device: torch.device) -> tuple[ParamGRU | None, dict[str, ResidualDist] | None, str]:
+    """Load latest ParamGRU checkpoint and residual dists, or (None, None, '')."""
     runs = sorted(PARAM_GRU_DIR.glob("run_*"))
     if not runs:
-        return None, None
+        return None, None, ""
     ckpt_path = runs[-1] / "best.pt"
     if not ckpt_path.exists():
-        return None, None
+        return None, None, ""
     ckpt  = torch.load(ckpt_path, map_location=device)
     known = {f.name for f in dataclasses.fields(ParamGRUConfig)}
     cfg   = ParamGRUConfig(**{k: v for k, v in ckpt["cfg"].items() if k in known})
     model = ParamGRU(cfg).to(device)
     model.load_state_dict(ckpt["model"])
     model.eval()
+    tag = f"param_gru:{runs[-1].name}/ep{ckpt['epoch']}"
     print(f"[param_gru] {runs[-1].name}  ep={ckpt['epoch']}")
 
     res_path = runs[-1] / "residuals.npz"
@@ -140,7 +143,7 @@ def load_param_gruvae(device: torch.device) -> tuple[ParamGRU | None, dict[str, 
         print(f"[param_gru] residual dists: {sorted(dists.keys())}")
     else:
         print("[param_gru] no residuals.npz — generation will be deterministic")
-    return model, dists
+    return model, dists, tag
 
 
 # ── structural generation ─────────────────────────────────────────────────────
@@ -432,7 +435,7 @@ def synthesize_svara(
             delta_n[0, i]   = d / 1200.0
             dur_sec_t[0, i] = seg["dur_sec"]
             delta_c[0, i]   = d
-            sta_tr_m[0, i]  = seg["type"] in ("STAp", "STAt", "TRa", "TRd")
+            sta_tr_m[0, i]  = seg["type"] in ("STAp", "STAt", "TRa", "TRd", "CP")
 
         dy0_init_t = torch.from_numpy(dy0_init_arr[np.newaxis, :]).to(device)  # (1, n_segs)
 
@@ -517,20 +520,28 @@ SEG_COLOR = {"CP": "#4caf50", "SIL": "#9e9e9e", "STAp": "#ff9800", "STAt": "#e65
              "TRa": "#2196f3", "TRd": "#0277bd"}
 
 
-def _plot_one(ax: plt.Axes, pitch: np.ndarray, segments: list[dict], title: str) -> None:
+def _plot_one(
+    ax: plt.Axes,
+    pitch: np.ndarray,
+    segments: list[dict],
+    title: str,
+    show_xlabel: bool = True,
+) -> None:
     t = np.arange(len(pitch)) / SYNTH_SR
 
-    # shade segments
     cursor = 0
-    for seg in segments:
-        n = max(1, round(seg["dur_sec"] * SYNTH_SR))
-        ax.axvspan(cursor / SYNTH_SR, (cursor + n) / SYNTH_SR,
+    for i, seg in enumerate(segments):
+        n        = max(1, round(seg["dur_sec"] * SYNTH_SR))
+        is_last  = (i == len(segments) - 1)
+        n_actual = n if is_last else n - 1   # matches curve[:-1] in phase 5
+        ax.axvspan(cursor / SYNTH_SR, (cursor + n_actual) / SYNTH_SR,
                    alpha=0.15, color=SEG_COLOR[seg["type"]], label=seg["type"])
-        cursor += n
+        cursor += n_actual
 
     ax.plot(t, pitch, color="#333", lw=0.8)
-    ax.axhline(0,    color="steelblue", lw=0.5, ls="--", alpha=0.5)
-    ax.set_xlabel("time (s)", fontsize=7)
+    ax.axhline(0, color="steelblue", lw=0.5, ls="--", alpha=0.5)
+    if show_xlabel:
+        ax.set_xlabel("time (s)", fontsize=7)
     ax.set_ylabel("cents", fontsize=7)
     ax.tick_params(labelsize=6)
     total_dur = sum(s["dur_sec"] for s in segments)
@@ -555,10 +566,10 @@ def main() -> None:
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    gruvae                  = load_gruvae(args.run, device)
-    cpvae, scale            = load_cpvae(device)
-    curve_model             = load_curve_model()
-    param_gruvae, res_dists = load_param_gruvae(device)
+    gruvae,      gruvae_tag    = load_gruvae(args.run, device)
+    cpvae, scale, cpvae_tag   = load_cpvae(device)
+    curve_model               = load_curve_model()
+    param_gruvae, res_dists, param_tag = load_param_gruvae(device)
     ending_stats            = load_stats()
     tr_sil_stats            = load_tr_sil_stats()
     df_curves               = pl.read_parquet(STA_TR_FIT) if STA_TR_FIT.exists() else None
@@ -599,7 +610,8 @@ def main() -> None:
                 boundary_sampler=boundary_sampler,
             )
             seg_str = " ".join(s["type"] for s in segs)
-            _plot_one(axes[r][c], pitch, segs, f"{svara} #{c+1} [{seg_str}]")
+            _plot_one(axes[r][c], pitch, segs, f"{svara} #{c+1} [{seg_str}]",
+                      show_xlabel=(r == n_rows - 1))
 
     # legend (segment type colours) — deduplicate
     from matplotlib.patches import Patch
@@ -608,14 +620,17 @@ def main() -> None:
     fig.legend(handles=handles, loc="lower center", ncol=4, fontsize=8,
                bbox_to_anchor=(0.5, -0.02))
 
+    run_tags = "  |  ".join(t for t in [gruvae_tag, cpvae_tag, param_tag] if t)
     fig.suptitle(
-        f"Synthesis — svara {'all' if args.all else args.svara}",
-        fontsize=10, fontweight="bold",
+        f"Synthesis — svara {'all' if args.all else args.svara}\n{run_tags}",
+        fontsize=9, fontweight="bold",
     )
-    plt.tight_layout(rect=[0, 0.04, 1, 1])
+    plt.tight_layout(rect=[0, 0.04, 1, 0.93], h_pad=2.5, w_pad=1.5)
 
-    svara_tag = "all" if args.all else args.svara
-    out = Path(args.out) if args.out else OUT_DIR / f"synth_{svara_tag}.png"
+    svara_tag  = "all" if args.all else args.svara
+    _slug = lambda t: t.replace(":", "-").replace("/", "-")
+    run_slug = "__".join(_slug(t) for t in [gruvae_tag, cpvae_tag, param_tag] if t)
+    out = Path(args.out) if args.out else OUT_DIR / f"synth_{svara_tag}__{run_slug}.png"
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=150, bbox_inches="tight")
     print(f"→ {out}")

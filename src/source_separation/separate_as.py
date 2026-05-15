@@ -103,7 +103,7 @@ def main():
     parser.add_argument("recordings", nargs="*", metavar="ID",
                         help="Recording ID(s) (CV mode). Defaults to CURRENT_PIECE.")
     parser.add_argument("--all", action="store_true",
-                        help="Process all recordings in settings.SARASUDA_VARNAM (CV mode).")
+                        help="Process all recordings in settings.RECORDING_SELECTION (CV mode).")
     parser.add_argument("--scms", action="store_true",
                         help="Process SCMS clips instead of CV corpus recordings.")
     parser.add_argument("--skip-existing", action="store_true",
@@ -151,7 +151,7 @@ def main():
 
     # ── CV mode ────────────────────────────────────────────────────────────────
     if args.all:
-        recordings = settings.SARASUDA_VARNAM
+        recordings = settings.RECORDING_SELECTION
     elif args.recordings:
         recordings = args.recordings
     else:

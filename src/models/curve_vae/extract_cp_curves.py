@@ -147,9 +147,9 @@ def extract_corpus(
     l_canonical: int = L_CANONICAL,
 ) -> pl.DataFrame:
     if recording_ids is None:
-        recording_ids = S.SARASUDA_VARNAM
+        recording_ids = S.RECORDING_SELECTION
     if tonic_map is None:
-        tonic_map = S.SARASUDA_TONICS
+        tonic_map = S.RECORDING_SELECTION_TONICS
 
     all_rows = []
     for rid in recording_ids:

@@ -18,7 +18,7 @@ from src.io.pitch_io import (
 )
 
 RECORDING_ID = "srs_v1_bdn_sav"
-TONIC_HZ = S.SARASUDA_TONICS[RECORDING_ID]
+TONIC_HZ = S.RECORDING_SELECTION_TONICS[RECORDING_ID]
 
 
 def check(label, fn):

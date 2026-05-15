@@ -287,10 +287,13 @@ class ParamGRU(nn.Module):
         all_slopes   = []
 
         for t in range(T):
-            # At boundary (dy0_required==0 and STA/TR): inject pre-computed init
+            # Override dy0_required with pre-computed init when nonzero.
+            # Using "nonzero" rather than "dy0_required==0" so actual CPVAE
+            # boundary slopes always take precedence over the chain value.
             if dy0_required_init is not None:
-                is_boundary = (dy0_required == 0.0) & sta_tr_mask[:, t]
-                dy0_required = torch.where(is_boundary, dy0_required_init[:, t], dy0_required)
+                init_val = dy0_required_init[:, t]
+                use_init = (init_val != 0.0) & sta_tr_mask[:, t]
+                dy0_required = torch.where(use_init, init_val, dy0_required)
 
             dy0_req_n = torch.tanh(dy0_required / M_SCALE).unsqueeze(-1)
             x_t = torch.cat([
@@ -328,8 +331,8 @@ class ParamGRU(nn.Module):
                 v_end_t = m1_t * delta_cents[:, t] / dur_sec[:, t].clamp(min=1e-4)
                 d_next  = delta_cents[:, t + 1]
                 dur_next = dur_sec[:, t + 1]
-                # Only propagate when current AND next segment are STA/TR;
-                # reset to 0 across CP/SIL boundaries.
+                # Propagate when current AND next segment are in sta_tr_mask
+                # (STA/TR and CP); reset to 0 across SIL boundaries.
                 both_active = sta_tr_mask[:, t].float() * sta_tr_mask[:, t + 1].float()
                 dy0_next = torch.where(
                     d_next.abs() > 1.0,

@@ -50,6 +50,7 @@ sys.path.insert(0, str(ROOT))
 import settings as S
 from src.io.pitch_io import load_preprocessed_pitch, load_flat_regions, load_peaks
 from src.io.annotation_io import load_annotations
+from src.utils.corpus_stamp import write_stamp
 from src.features.structural_embedding import (
     label_samples_sil_cp_sta,
     map_peaks_to_global_rows,
@@ -217,8 +218,8 @@ def _extract_one_recording(
 
 
 def build_segment_dataset(
-    recording_ids: list[str] = S.SARASUDA_VARNAM,
-    tonic_map: dict[str, float] = S.SARASUDA_TONICS,
+    recording_ids: list[str] = S.RECORDING_SELECTION,
+    tonic_map: dict[str, float] = S.RECORDING_SELECTION_TONICS,
 ) -> pl.DataFrame:
     all_records: list[dict] = []
     for rid in recording_ids:
@@ -228,6 +229,7 @@ def build_segment_dataset(
     INTERIM_DIR.mkdir(parents=True, exist_ok=True)
     out = INTERIM_DIR / "segment_shapes.parquet"
     df.write_parquet(out)
+    write_stamp(out)
     print(f"Saved {len(df)} segments → {out}")
     return df
 

@@ -22,6 +22,7 @@ import torch
 from torch.utils.data import random_split, DataLoader
 
 import settings as S
+from src.utils.corpus_stamp import corpus_meta
 from src.models.gruvae.dataset_gruvae import (
     SvaraDataset,
     collate_svara_batch,
@@ -39,7 +40,7 @@ from src.models.gruvae.model_gruvae import (
 # CONFIG
 # ============================================================
 
-RECORDING_IDS  = None    # None → all S.SARASUDA_VARNAM; or e.g. ["srs_v1_bdn_sav"]
+RECORDING_IDS  = None    # None → all S.RECORDING_SELECTION; or e.g. ["srs_v1_bdn_sav"]
 CV_CHECKPOINT_DIR = S.GRUVAE_CV_DIR
 EPOCHS         = 800
 BATCH_SIZE     = 32
@@ -125,7 +126,7 @@ def _make_loaders(
 
     if val_recording_id is not None:
         # Leave-one-recording-out split
-        all_ids = recording_ids if recording_ids is not None else S.SARASUDA_VARNAM
+        all_ids = recording_ids if recording_ids is not None else S.RECORDING_SELECTION
         train_ids = [r for r in all_ids if r != val_recording_id]
         train_ds = SvaraDataset(recording_ids=train_ids,         feature_cols=DATASET_FEATURE_COLS)
         val_ds   = SvaraDataset(recording_ids=[val_recording_id], feature_cols=DATASET_FEATURE_COLS)
@@ -211,7 +212,7 @@ def train(
     # Fold overrides: leave-one-recording-out + dedicated checkpoint dir
     val_recording_id: str | None = None
     if fold is not None:
-        val_recording_id = S.SARASUDA_VARNAM[fold]
+        val_recording_id = S.RECORDING_SELECTION[fold]
         short = val_recording_id.split("_")[2]   # e.g. "bdn"
         checkpoint_dir = CV_CHECKPOINT_DIR / f"fold_{fold}_{short}"
         print(f"[train] 5-fold CV  fold={fold}  val={val_recording_id}")
@@ -257,6 +258,11 @@ def train(
 
     run_dir = checkpoint_dir / f"run_{run_id:03d}"
     run_dir.mkdir(exist_ok=True)
+
+    if not resumed:
+        (run_dir / "config.json").write_text(
+            json.dumps({**dataclasses.asdict(model_cfg), **corpus_meta()}, indent=2)
+        )
 
     tee = _Tee(run_dir / f"run_{run_id:03d}.log", append=resumed)
     sys.stdout = tee

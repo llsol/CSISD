@@ -68,7 +68,7 @@ DUR_ORDER = ["short", "medium", "long"]
 
 def _load_svara_durations() -> pl.DataFrame:
     dfs = []
-    for rec in S.SARASUDA_VARNAM:
+    for rec in S.RECORDING_SELECTION:
         p = S.INTERIM_RECORDINGS / rec / "features" / f"{rec}_svara_structural_embeddings.parquet"
         if p.exists():
             dfs.append(

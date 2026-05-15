@@ -22,7 +22,9 @@ from torch.utils.data import Dataset, DataLoader, random_split
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
+import json
 import settings as S
+from src.utils.corpus_stamp import corpus_meta
 from src.models.gruvae.dataset_gruvae import SVARA_TO_IDX
 from src.models.curve_vae.cp_vae import CPVAE, CPVAEConfig, L_CANONICAL
 
@@ -140,6 +142,11 @@ def main() -> None:
         run_dir = _new_run(CKPT_DIR)
         cfg     = CPVAEConfig(latent_dim=args.latent)
         model   = CPVAE(cfg).to(device)
+        (run_dir / "config.json").write_text(
+            json.dumps({"latent_dim": cfg.latent_dim, "channels": cfg.channels,
+                        "beta": cfg.beta, "free_bits": cfg.free_bits,
+                        **corpus_meta()}, indent=2)
+        )
         print(f"New run: {run_dir.name}")
     else:
         run_dir = _latest_run(CKPT_DIR)
@@ -176,6 +183,7 @@ def main() -> None:
                          "free_bits":  cfg.free_bits},
             "best_val": best_val,
             "scale":    dataset.scale,
+            **corpus_meta(),
         }
         torch.save(ckpt_data, run_dir / "last.pt")
         if is_best:

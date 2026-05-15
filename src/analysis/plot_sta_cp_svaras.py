@@ -81,10 +81,10 @@ def load_matching_svaras(
     """
     matches = []
 
-    for rid in S.SARASUDA_VARNAM:
+    for rid in S.RECORDING_SELECTION:
         print(f"  {rid}...")
         performer = rid.split("_")[2]
-        tonic_hz  = S.SARASUDA_TONICS[rid]
+        tonic_hz  = S.RECORDING_SELECTION_TONICS[rid]
 
         df_pitch = load_preprocessed_pitch(rid, S.INTERIM_RECORDINGS, tonic_hz, convert_to_cents=True)
         df_flat  = load_flat_regions(recording_id=rid, root_dir=S.INTERIM_RECORDINGS)

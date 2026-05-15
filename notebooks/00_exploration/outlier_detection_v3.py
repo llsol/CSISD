@@ -452,7 +452,7 @@ def run(recording_id: str, sep: str = "unet"):
     f0_raw = raw[:n, 1]
     f0_sep = sep_[:n, 1]
 
-    tonic = settings.SARASUDA_TONICS.get(recording_id, 200.0)
+    tonic = settings.RECORDING_SELECTION_TONICS.get(recording_id, 200.0)
     print(f"\nRecording : {recording_id}  [{sep_label}]")
     print(f"Tonic     : {tonic:.1f} Hz")
     print(f"Frames    : {n:,}  ({time[-1]:.1f} s)")
@@ -485,11 +485,11 @@ def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("recordings", nargs="*",
-                        help="Recording IDs (default: all SARASUDA_VARNAM)")
+                        help="Recording IDs (default: all RECORDING_SELECTION)")
     parser.add_argument("--as", dest="as_model", action="store_true",
                         help="Use BS-RoFormer separated pitch instead of U-Net")
     args = parser.parse_args()
-    recordings = args.recordings or settings.SARASUDA_VARNAM
+    recordings = args.recordings or settings.RECORDING_SELECTION
     sep = "as" if args.as_model else "unet"
     for recording_id in recordings:
         run(recording_id, sep=sep)

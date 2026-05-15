@@ -4,7 +4,7 @@ import polars as pl
 from src.io.pitch_io import save_preprocessed_pitch
 from src.io.pitch_io import load_pitch_file   
 from src.preprocessing.pitch_preprocessing import preprocess_pitch
-from settings import SARASUDA_VARNAM
+from settings import RECORDING_SELECTION
 
 
 
@@ -23,7 +23,7 @@ def preprocess_one_recording(recording_id):
 
 
 def preprocess_all_recordings():
-    for rec in SARASUDA_VARNAM:
+    for rec in RECORDING_SELECTION:
         print(f" Preprocessant {rec}...")
         preprocess_one_recording(rec)
     print("\n All recordings preprocessed.")

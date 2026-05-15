@@ -49,7 +49,7 @@ def _load_svara_segments(recording_id: str) -> list[list[str]]:
     Returns a list of svaras; each svara is a list of segment type strings
     in order, e.g. ['CP', 'STAp', 'STAt', 'TRd', 'CP'].
     """
-    tonic_hz = S.SARASUDA_TONICS[recording_id]
+    tonic_hz = S.RECORDING_SELECTION_TONICS[recording_id]
     df_pitch  = load_preprocessed_pitch(recording_id, S.INTERIM_RECORDINGS, tonic_hz, convert_to_cents=True)
     df_flat   = load_flat_regions(recording_id=recording_id, root_dir=S.INTERIM_RECORDINGS)
     df_peaks  = load_peaks(recording_id=recording_id, root_dir=S.INTERIM_RECORDINGS)
@@ -83,7 +83,7 @@ def _load_svara_segments(recording_id: str) -> list[list[str]]:
 
 def load_all_svara_seqs() -> list[list[str]]:
     all_seqs = []
-    for rid in S.SARASUDA_VARNAM:
+    for rid in S.RECORDING_SELECTION:
         print(f"  {rid}...")
         all_seqs.extend(_load_svara_segments(rid))
     print(f"  Total svaras: {len(all_seqs)}")

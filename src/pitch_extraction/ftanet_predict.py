@@ -95,7 +95,7 @@ def main():
     )
     parser.add_argument(
         "--all", action="store_true",
-        help="Process all recordings in settings.SARASUDA_VARNAM.",
+        help="Process all recordings in settings.RECORDING_SELECTION.",
     )
     parser.add_argument(
         "--scms", action="store_true",
@@ -168,7 +168,7 @@ def main():
 
     # ── corpus mode ────────────────────────────────────────────────────────────
     if args.all:
-        recordings = settings.SARASUDA_VARNAM
+        recordings = settings.RECORDING_SELECTION
     else:
         recordings = [args.recording_id or settings.CURRENT_PIECE]
 

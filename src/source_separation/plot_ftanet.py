@@ -57,7 +57,7 @@ def plot_pitch(recording_id: str, source: str):
     data   = np.load(npy_path)
     time   = data[:, 0]
     f0_hz  = data[:, 1]
-    tonic  = settings.SARASUDA_TONICS.get(recording_id, TONIC_FALLBACK)
+    tonic  = settings.RECORDING_SELECTION_TONICS.get(recording_id, TONIC_FALLBACK)
     cents  = hz_to_cents(f0_hz, tonic)
 
     voiced_pct         = np.isfinite(cents).mean() * 100

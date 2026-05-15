@@ -137,8 +137,8 @@ def _extract_one_recording(
 
 
 def compute_and_save(
-    recording_ids: list[str] = S.SARASUDA_VARNAM,
-    tonic_map: dict[str, float] = S.SARASUDA_TONICS,
+    recording_ids: list[str] = S.RECORDING_SELECTION,
+    tonic_map: dict[str, float] = S.RECORDING_SELECTION_TONICS,
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
     all_end:    list[dict] = []
     all_tr_sil: list[dict] = []

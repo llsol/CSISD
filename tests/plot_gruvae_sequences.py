@@ -28,7 +28,7 @@ from src.models.gruvae.dataset_gruvae import build_svara_sequences, INPUT_DIM
 # Config — adjust as needed
 # ---------------------------------------------------------------------------
 RECORDING_ID = "srs_v1_svd_sav"
-TONIC_HZ     = S.SARASUDA_TONICS[RECORDING_ID]
+TONIC_HZ     = S.RECORDING_SELECTION_TONICS[RECORDING_ID]
 N_SVARAS     = 8       # how many svaras to plot
 COLS         = 2       # subplot columns
 FIGSIZE      = (14, 4)

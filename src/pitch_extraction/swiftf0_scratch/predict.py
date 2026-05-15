@@ -135,7 +135,7 @@ def main():
     parser.add_argument("recordings", nargs="*",
                         help="Recording ID(s). Defaults to CURRENT_PIECE.")
     parser.add_argument("--all", action="store_true",
-                        help="Process all recordings in settings.SARASUDA_VARNAM.")
+                        help="Process all recordings in settings.RECORDING_SELECTION.")
     parser.add_argument("--scms", action="store_true",
                         help="Process all SCMS test clips in data/datasets/scms/audio/.")
     parser.add_argument("--skip-existing", action="store_true",
@@ -202,7 +202,7 @@ def main():
 
     # ── corpus mode ────────────────────────────────────────────────────────────
     if args.all:
-        recordings = settings.SARASUDA_VARNAM
+        recordings = settings.RECORDING_SELECTION
     elif args.recordings:
         recordings = args.recordings
     else:

@@ -12,7 +12,7 @@ Usage:
     # BS-RoFormer separated voice:
     python -m src.pitch_extraction.swiftf0_predict srs_v1_svd_sav --as
 
-    # All SARASUDA_VARNAM:
+    # All RECORDING_SELECTION:
     python -m src.pitch_extraction.swiftf0_predict --all
     python -m src.pitch_extraction.swiftf0_predict --all --as
 
@@ -104,10 +104,10 @@ def main():
     )
     parser.add_argument(
         "recordings", nargs="*",
-        help="Recording ID(s). Defaults to CURRENT_PIECE; use --all for SARASUDA_VARNAM.",
+        help="Recording ID(s). Defaults to CURRENT_PIECE; use --all for RECORDING_SELECTION.",
     )
     parser.add_argument("--all",  action="store_true",
-                        help="Process all recordings in settings.SARASUDA_VARNAM.")
+                        help="Process all recordings in settings.RECORDING_SELECTION.")
     parser.add_argument("--scms", action="store_true",
                         help="Process all SCMS clips.")
     parser.add_argument("--skip-existing", action="store_true",
@@ -154,7 +154,7 @@ def main():
 
     # ── corpus mode ────────────────────────────────────────────────────────────
     if args.all:
-        recordings = settings.SARASUDA_VARNAM
+        recordings = settings.RECORDING_SELECTION
     elif args.recordings:
         recordings = args.recordings
     else:

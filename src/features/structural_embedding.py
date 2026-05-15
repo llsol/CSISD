@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
-from settings import SARASUDA_VARNAM
+from settings import RECORDING_SELECTION
 from src.io.pitch_io import load_preprocessed_pitch, load_flat_regions, load_peaks
 from src.io.annotation_io import load_annotations
 
@@ -134,7 +134,7 @@ def structural_embedding_one_recording(
 
 def structural_embedding_all_recordings(
     tonic_map: dict[str, float],
-    recording_ids: list[str] = SARASUDA_VARNAM,
+    recording_ids: list[str] = RECORDING_SELECTION,
     corpus_root: Path | str = "data/corpus",
     interim_root: Path | str | None = None,
     max_segments: int = 12,

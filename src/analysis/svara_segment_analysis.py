@@ -39,7 +39,7 @@ from src.features.structural_embedding import (
 
 # ── constants ─────────────────────────────────────────────────────────────────
 
-RECORDINGS = S.SARASUDA_VARNAM
+RECORDINGS = S.RECORDING_SELECTION
 PERFORMER  = {rec: rec.split('_')[2] for rec in RECORDINGS}
 COLORS     = {
     'bdn': '#e41a1c', 'drn': '#377eb8', 'psn': '#4daf4a',
@@ -52,7 +52,7 @@ SCALE_ORDER = ['S', 'R', 'G', 'M', 'P', 'D', 'N']
 
 def load_recording(recording_id: str):
     """Load pitch, peaks and svara annotations for one recording."""
-    tonic_hz = S.SARASUDA_TONICS[recording_id]
+    tonic_hz = S.RECORDING_SELECTION_TONICS[recording_id]
 
     df_pitch = load_preprocessed_pitch(
         recording_id=recording_id,

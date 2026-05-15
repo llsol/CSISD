@@ -146,7 +146,7 @@ def main():
     group.add_argument("--recordings", nargs="+", metavar="ID",
                        help="One or more recording IDs (e.g. srs_v1_rkm_sav)")
     group.add_argument("--all", action="store_true",
-                       help="Process all recordings defined in S.SARASUDA_VARNAM")
+                       help="Process all recordings defined in S.RECORDING_SELECTION")
     parser.add_argument("--checkpoint", type=Path, default=_default_checkpoint())
     args = parser.parse_args()
 
@@ -156,7 +156,7 @@ def main():
 
     model = _load_model(args.checkpoint, device)
 
-    recordings = S.SARASUDA_VARNAM if args.all else args.recordings
+    recordings = S.RECORDING_SELECTION if args.all else args.recordings
     print(f"Processing {len(recordings)} recording(s)...\n")
 
     for rec_id in recordings:

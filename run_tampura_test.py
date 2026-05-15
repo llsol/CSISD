@@ -10,7 +10,7 @@ import librosa
 import soundfile as sf
 from pathlib import Path
 
-from settings import SARASUDA_TONICS
+from settings import RECORDING_SELECTION_TONICS
 from src.source_separation import separate_tampura
 
 RECORDING_ID = "srs_v1_svd_sav"
@@ -20,7 +20,7 @@ AUDIO_OUT = OUT_DIR / f"{RECORDING_ID}_clean.wav"
 RESIDUAL  = OUT_DIR / f"{RECORDING_ID}_residual.wav"
 
 SR = 22050
-tonic = SARASUDA_TONICS[RECORDING_ID]
+tonic = RECORDING_SELECTION_TONICS[RECORDING_ID]
 
 print(f"Input : {AUDIO_IN}")
 print(f"Tonic : {tonic:.2f} Hz")

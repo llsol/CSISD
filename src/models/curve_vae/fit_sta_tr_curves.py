@@ -41,6 +41,7 @@ from scipy.optimize import curve_fit
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 import settings as S
+from src.utils.corpus_stamp import write_stamp
 
 DEFAULT_CURVES = S.CURVE_VAE_DIR / "gt_curves.parquet"
 DEFAULT_OUT    = S.CURVE_VAE_DIR / "gt_curves_fitted.parquet"
@@ -184,6 +185,7 @@ def main() -> None:
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     df_fit.write_parquet(out)
+    write_stamp(out)
     print(f"\nSaved → {out}")
 
     for seg_type in ("STAp", "STAt", "TRa", "TRd"):

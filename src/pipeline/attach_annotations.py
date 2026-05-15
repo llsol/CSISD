@@ -4,7 +4,7 @@ from src.annotations.svara import attach_svara_annotations_to_pitch
 from src.annotations.sections import attach_section_annotations_to_pitch
 from src.io.pitch_io import load_pitch_file, save_pitch_file
 import settings as S
-from settings import SARASUDA_VARNAM
+from settings import RECORDING_SELECTION
 import polars as pl
 
 
@@ -59,7 +59,7 @@ def add_annotations_to_preprocessed_pitch(
 
 if __name__ == "__main__":
     corpus_root = Path("data/corpus")
-    for recording_id in SARASUDA_VARNAM:
+    for recording_id in RECORDING_SELECTION:
         pitch_file_path = S.INTERIM_RECORDINGS / recording_id / "pitch" / f"{recording_id}_pitch_preprocessed.parquet"
         svara_path = corpus_root / recording_id / "raw" / f"{recording_id}_ann_svara.tsv"
         section_path = corpus_root / recording_id / "annotations" / f"{recording_id}_ann_section.tsv"

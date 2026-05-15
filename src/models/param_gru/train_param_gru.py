@@ -20,8 +20,9 @@ from torch.utils.data import DataLoader, random_split
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 import settings as S
+from src.utils.corpus_stamp import corpus_meta, check_stamp
 
-from src.models.param_gru.dataset_param_gru import build_dataset, collate_param_batch
+from src.models.param_gru.dataset_param_gru import build_dataset, collate_param_batch, SHAPES_PATH
 from src.models.param_gru.model_param_gru import (
     ParamGRUConfig, ParamGRU, total_loss, fit_residuals, save_residuals,
     b2_slope_loss,   # kept for diagnostic sanity check post-training
@@ -142,8 +143,9 @@ def main() -> None:
     n_params  = sum(p.numel() for p in model.parameters())
     print(f"Params: {n_params:,}")
 
+    check_stamp(SHAPES_PATH)
     (run_dir / "config.json").write_text(
-        json.dumps(dataclasses.asdict(MODEL_CFG), indent=2)
+        json.dumps({**dataclasses.asdict(MODEL_CFG), **corpus_meta()}, indent=2)
     )
 
     best_val = float("inf")

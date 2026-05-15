@@ -148,7 +148,7 @@ def main():
     parser.add_argument("recordings", nargs="*",
                         help="Recording ID(s). Defaults to CURRENT_PIECE.")
     parser.add_argument("--all", action="store_true",
-                        help="Process all recordings in settings.SARASUDA_VARNAM.")
+                        help="Process all recordings in settings.RECORDING_SELECTION.")
     parser.add_argument("--run", default=None,
                         help="Training run directory name (e.g. run_002). "
                              "Defaults to the latest run.")
@@ -221,7 +221,7 @@ def main():
         return
 
     if args.all:
-        recordings = settings.SARASUDA_VARNAM
+        recordings = settings.RECORDING_SELECTION
     elif args.recordings:
         recordings = args.recordings
     else:

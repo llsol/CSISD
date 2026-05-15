@@ -41,7 +41,7 @@ def plot_embeddings(svara_labels, performers, out_dir: Path) -> None:
     for rec in RECORDINGS:
         df_emb = structural_embedding_one_recording(
             recording_id=rec,
-            tonic_hz=S.SARASUDA_TONICS[rec],
+            tonic_hz=S.RECORDING_SELECTION_TONICS[rec],
             corpus_root=S.DATA_CORPUS,
             interim_root=S.INTERIM_RECORDINGS,
             max_segments=12,

@@ -6,18 +6,20 @@ Segments are ordered by seg_idx and include CP, STA, TR.
 
 Encoder input per segment (ENC_INPUT_DIM = 11):
     seg_type_oh(6) | dur_rel(1) | delta_norm(1) | log_k_raw(1) | logit_s_raw(1) | A_raw(1)
-    For CP: last 3 dims = 0 (no tanh+osc fit).
+    For CP: last 3 dims encode default near-linear params (k=K_MIN, s=0.5, A=0).
 
 Decoder input per segment (DEC_INPUT_DIM = 9):
     seg_type_oh(6) | dur_rel(1) | delta_norm(1) | dy0_required_norm(1)
     dy0_required_norm = tanh(dy0_required / M_SCALE)
-    dy0_required = norm_deriv_at(0, k_gt, s_gt, A_gt) for STA/TR; 0 otherwise.
-    At inference: propagated from m1 of the previous STA/TR segment.
+    dy0_required = norm_deriv_at(0, k_gt, s_gt, A_gt) for STA/TR;
+                   norm_deriv_at(K_MIN, 0.5, 0, False) ≈ 0.984 for CP (near-linear).
+    At inference: propagated from m1 of the previous STA/TR or CP segment.
 
-Targets (OUTPUT_DIM = 3), masked to STA/TR only:
+Targets (OUTPUT_DIM = 3), masked to STA/TR AND CP:
     log_k_raw = log(k) / LOG_K_SCALE
     logit_s_raw = logit(s) / LOGIT_S_SCALE
     A_raw = A / A_SCALE
+    CP targets use near-linear defaults (k=K_MIN, s=0.5, A=0).
 
 Load:
     from src.models.param_gru.dataset_param_gru import build_dataset, collate_param_batch
@@ -160,37 +162,40 @@ def _build_sequence(rows: list[dict], total_dur: float, svara_idx: int) -> dict 
         dur_rel   = r["dur_sec"] / total_dur if total_dur > 1e-6 else 0.0
         delta_n   = delta / 1200.0
 
-        # encoder input: structural + params (zeros for non-STA/TR)
-        log_k  = _safe_log_k(r.get("k_steep"))
-        lgts   = _safe_logit_s(r.get("s_inflect"))
-        A_n    = _safe_A(r.get("A_osc"))
-        has_params = seg in ("STAp", "STAt", "TRa", "TRd") and r.get("k_steep") is not None
-        enc_input[i] = oh + [dur_rel, delta_n,
-                             log_k if has_params else 0.0,
-                             lgts  if has_params else 0.0,
-                             A_n   if has_params else 0.0]
+        # CP uses near-linear default params (k=K_MIN, s=0.5, A=0) — not fitted.
+        # STA/TR use GT fitted params if available.
+        is_cp  = seg == "CP"
+        is_sta_tr = seg in ("STAp", "STAt", "TRa", "TRd")
+        has_params = is_sta_tr and r.get("k_steep") is not None
 
-        # decoder structural (slope_prev added in collate)
+        if is_cp:
+            k_v, s_v, A_v = K_MIN, 0.5, 0.0
+        elif has_params:
+            k_v = r["k_steep"]   if r["k_steep"]   is not None else 1.0
+            s_v = r["s_inflect"] if r["s_inflect"] is not None else 0.5
+            A_v = r["A_osc"]     if r["A_osc"]     is not None else 0.0
+        else:
+            k_v, s_v, A_v = 1.0, 0.5, 0.0
+
+        use_params = has_params or is_cp
+        enc_input[i] = oh + [dur_rel, delta_n,
+                             _safe_log_k(k_v)   if use_params else 0.0,
+                             _safe_logit_s(s_v) if use_params else 0.0,
+                             _safe_A(A_v)       if use_params else 0.0]
+
         dec_struct[i] = oh + [dur_rel, delta_n]
 
-        dur_sec_arr[i]    = r["dur_sec"]
+        dur_sec_arr[i]     = r["dur_sec"]
         delta_cents_arr[i] = delta
 
-        # dy0_required for this step: the normalized slope that the curve
-        # at this step should naturally start with (from its own GT fit).
-        # For STA/TR with fitted params: norm_deriv_at(0, k, s, A).
-        # For CP/SIL (or missing params): 0 — no constraint.
-        if has_params:
-            k_v = r["k_steep"]  if r["k_steep"]  is not None else 1.0
-            s_v = r["s_inflect"] if r["s_inflect"] is not None else 0.5
-            A_v = r["A_osc"]    if r["A_osc"]    is not None else 0.0
+        # dy0_required: normalized start slope from GT fit (STA/TR) or
+        # near-linear default (CP: m0 ≈ 0.984). SIL → 0 (no constraint).
+        if use_params:
             dy0_required_gt[i] = norm_deriv_at(k_v, s_v, A_v, at_end=False)
 
-        # target
-        if has_params:
-            targets[i]     = [_safe_log_k(r["k_steep"]),
-                               _safe_logit_s(r["s_inflect"]),
-                               _safe_A(r["A_osc"])]
+        # targets include CP (near-linear defaults) and fitted STA/TR
+        if use_params:
+            targets[i]     = [_safe_log_k(k_v), _safe_logit_s(s_v), _safe_A(A_v)]
             target_mask[i] = True
 
     # decoder input: append dy0_required_norm (tanh-squashed normalized slope)

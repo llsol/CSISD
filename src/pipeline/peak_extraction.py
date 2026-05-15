@@ -2,8 +2,8 @@ from src.io.pitch_io import load_preprocessed_pitch, save_peaks
 from src.features.peaks import extract_peaks
 import settings as S
 
-RECORDING_IDS = S.SARASUDA_VARNAM
-TONICS = S.SARASUDA_TONICS
+RECORDING_IDS = S.RECORDING_SELECTION
+TONICS = S.RECORDING_SELECTION_TONICS
 
 if __name__ == "__main__":
 

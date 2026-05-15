@@ -79,7 +79,7 @@ def estimate_tonic(
 ) -> float:
     """
     Rough tonic estimate via harmonic product spectrum over the mean magnitude.
-    Prefer passing the known tonic from settings.SARASUDA_TONICS.
+    Prefer passing the known tonic from settings.RECORDING_SELECTION_TONICS.
     """
     mean_spec = S_mag.mean(axis=1)
     band = (freqs >= f_min) & (freqs <= f_max)

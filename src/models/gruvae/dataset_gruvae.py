@@ -183,8 +183,8 @@ def build_svara_sequences(
 # ---------------------------------------------------------------------------
 
 def build_corpus_sequences(
-    tonic_map: dict[str, float] = S.SARASUDA_TONICS,
-    recording_ids: list[str] = S.SARASUDA_VARNAM,
+    tonic_map: dict[str, float] = S.RECORDING_SELECTION_TONICS,
+    recording_ids: list[str] = S.RECORDING_SELECTION,
     corpus_root: Path | str = "data/corpus",
     interim_root: Path | str | None = None,
     tau_init_sil: float = 0.30,
@@ -253,10 +253,10 @@ class SvaraDataset(Dataset):
     Parameters
     ----------
     recording_ids : list[str] | None
-        Recordings to include.  None → all recordings in S.SARASUDA_VARNAM.
+        Recordings to include.  None → all recordings in S.RECORDING_SELECTION.
         Pass a single-element list to train on one piece only.
     tonic_map : dict[str, float] | None
-        Tonic in Hz per recording.  None → S.SARASUDA_TONICS.
+        Tonic in Hz per recording.  None → S.RECORDING_SELECTION_TONICS.
     feature_cols : list[int] | None
         Column indices to keep from the 6-feature sequences before returning.
         None → return all 6 features.
@@ -274,9 +274,9 @@ class SvaraDataset(Dataset):
         tau_init_sil: float = 0.30,
     ):
         if recording_ids is None:
-            recording_ids = S.SARASUDA_VARNAM
+            recording_ids = S.RECORDING_SELECTION
         if tonic_map is None:
-            tonic_map = S.SARASUDA_TONICS
+            tonic_map = S.RECORDING_SELECTION_TONICS
 
         self.feature_cols = feature_cols
         self._sequences:     list[np.ndarray] = []

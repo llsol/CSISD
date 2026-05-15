@@ -56,6 +56,20 @@ SARASUDA_TONICS = {
     "srs_v1_vgn_sav": 138.59,
 }
 
+# ── Ground-truth version ─────────────────────────────────────────────────────
+PIECE_SET     = "sarasuda"   # label for the active recording collection
+ANN_VERSION   = "v1"         # bump when annotation files change
+PITCH_SOURCE  = "ftanet"     # "ftanet" | "swiftf0" | ...
+PITCH_VERSION = "v1"         # bump when pitch extraction changes
+
+# Active recordings used for training, analysis, and corpus hashing.
+# Override to mix pieces from different collections.
+RECORDING_SELECTION        = SARASUDA_VARNAM
+RECORDING_SELECTION_TONICS = SARASUDA_TONICS
+
+# Auto-derived — do not edit manually
+CORPUS_ID = f"{PIECE_SET}_ann_{ANN_VERSION}_pitch_{PITCH_SOURCE}_{PITCH_VERSION}"
+
 CURRENT_PIECE = "srs_v1_bdn_sav"
 
 

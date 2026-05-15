@@ -6,7 +6,7 @@ from src.io.pitch_io import save_flat_regions
 
 
 def run_flat_regions(recording_id: str):
-    tonic_hz = S.SARASUDA_TONICS.get(recording_id)
+    tonic_hz = S.RECORDING_SELECTION_TONICS.get(recording_id)
 
     df = load_preprocessed_pitch(
         recording_id=recording_id,
@@ -44,7 +44,7 @@ def run_flat_regions(recording_id: str):
 
 
 if __name__ == "__main__":
-    for recording_id in S.SARASUDA_VARNAM:
+    for recording_id in S.RECORDING_SELECTION:
         print(f"Processing flat regions for recording: {recording_id}")
         out_path = run_flat_regions(recording_id)
         print(f"Saved flat regions to: {out_path}")

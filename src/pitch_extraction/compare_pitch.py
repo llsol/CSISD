@@ -14,7 +14,7 @@ Usage:
     python -m src.pitch_extraction.compare_pitch srs_v1_svd_sav \\
         --extractor-a ftanet --source-a original --extractor-b swiftf0ft --source-b as
 
-    # All SARASUDA_VARNAM:
+    # All RECORDING_SELECTION:
     python -m src.pitch_extraction.compare_pitch --all --source as
 
 Reads:
@@ -196,7 +196,7 @@ def compare(
     time_a, f0_a = data_a[:, 0], data_a[:, 1]
     time_b, f0_b = data_b[:, 0], data_b[:, 1]
 
-    tonic       = settings.SARASUDA_TONICS.get(recording_id, TONIC_FALLBACK)
+    tonic       = settings.RECORDING_SELECTION_TONICS.get(recording_id, TONIC_FALLBACK)
     cents_a_raw = hz_to_cents(f0_a, tonic)
     cents_b_raw = hz_to_cents(f0_b, tonic)
 
@@ -337,9 +337,9 @@ def main():
         description="Compare two pitch extractors on the same audio source."
     )
     parser.add_argument("recordings", nargs="*",
-                        help="Recording IDs (default: all SARASUDA_VARNAM)")
+                        help="Recording IDs (default: all RECORDING_SELECTION)")
     parser.add_argument("--all", action="store_true",
-                        help="Process all recordings in settings.SARASUDA_VARNAM")
+                        help="Process all recordings in settings.RECORDING_SELECTION")
     parser.add_argument("--source", default="unet",
                         help="Audio source for both A and B: original | unet | as")
     parser.add_argument("--source-a", default=None,
@@ -355,7 +355,7 @@ def main():
     sa = args.source_a or args.source
     sb = args.source_b or args.source
 
-    recordings = (settings.SARASUDA_VARNAM if (args.all or not args.recordings)
+    recordings = (settings.RECORDING_SELECTION if (args.all or not args.recordings)
                   else args.recordings)
 
     for rec_id in recordings:
