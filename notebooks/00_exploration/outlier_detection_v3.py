@@ -35,6 +35,21 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 import settings
 
+# ── path helpers (mirrored from agree_analysis) ──────────────────────────────
+EXTRACTOR_CV_DIR = {
+    "ftanet": "ftanet",
+}
+EXTRACTOR_FILE_SUFFIX = {
+    "ftanet": "ftanet",
+}
+
+
+def _pitch_path(extractor: str, source: str, recording_id: str) -> Path:
+    cv_dir = EXTRACTOR_CV_DIR[extractor]
+    suffix = EXTRACTOR_FILE_SUFFIX[extractor]
+    return (settings.INTERIM_PITCH_CV / cv_dir / source / recording_id
+            / f"{recording_id}_{source}_{suffix}_raw.npy")
+
 # ── parameters ──────────────────────────────────────────────────────────────
 VOICED_MIN_HZ       = 50.0    # f0 below this → unvoiced
 DISCREPANCY_THRESH  = 100.0   # cents: both voiced but disagree → uncertain
@@ -432,15 +447,14 @@ SEP_LABELS = {"unet": "U-Net", "as": "BS-RoFormer"}
 
 def run(recording_id: str, sep: str = "unet"):
     sep_label = SEP_LABELS.get(sep, sep)
-    pitch_dir = settings.DATA_INTERIM / recording_id / "pitch_raw"
-    raw_path  = pitch_dir / f"{recording_id}_reproduction_ftanet_raw.npy"
-    sep_path  = pitch_dir / f"{recording_id}_{sep}_ftanet_raw.npy"
+    raw_path = _pitch_path("ftanet", "original", recording_id)
+    sep_path = _pitch_path("ftanet", sep,        recording_id)
 
     if not raw_path.exists():
-        raise FileNotFoundError(f"Reproduction pitch not found: {raw_path}")
+        raise FileNotFoundError(f"Original FTA-Net pitch not found: {raw_path}")
     if not sep_path.exists():
         raise FileNotFoundError(
-            f"{sep_label} pitch not found: {sep_path}\n"
+            f"{sep_label} FTA-Net pitch not found: {sep_path}\n"
             f"Run: python -m src.pitch_extraction.ftanet_predict --{sep}"
         )
 

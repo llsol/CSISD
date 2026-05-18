@@ -25,6 +25,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+from matplotlib.lines import Line2D
 from matplotlib.widgets import RadioButtons, CheckButtons, Button
 import numpy as np
 from scipy import interpolate
@@ -69,6 +70,12 @@ EXTRACTOR_CV_DIR = {
     "swiftf0ft":      "swiftf0_finetune",
     "swiftf0scratch": "swiftf0_scratch",
 }
+EXTRACTOR_FILE_SUFFIX = {
+    "ftanet":         "ftanet",
+    "swiftf0":        "swiftf0",
+    "swiftf0ft":      "swiftf0finetune",
+    "swiftf0scratch": "swiftf0scratch",
+}
 SOURCE_LABELS = {
     "original": "original mix",
     "unet":     "U-Net separated",
@@ -81,8 +88,9 @@ ALL_SOURCES = ["original", "as", "unet"]
 
 def _pitch_path(extractor: str, source: str, recording_id: str) -> Path:
     cv_dir = EXTRACTOR_CV_DIR.get(extractor, extractor)
+    suffix = EXTRACTOR_FILE_SUFFIX.get(extractor, extractor)
     return (settings.INTERIM_PITCH_CV / cv_dir / source / recording_id
-            / f"{recording_id}_{source}_{extractor}_raw.npy")
+            / f"{recording_id}_{source}_{suffix}_raw.npy")
 
 
 def load_pitch(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
@@ -282,94 +290,182 @@ class InteractiveFig:
         thrs_sorted = sorted(self.active_thrs) if self.active_thrs else [None]
         b_tracks = []
         for thr in thrs_sorted:
-            f0 = apply_thr(f0_b_raw, conf_b, thr) if thr else f0_b_raw
+            f0    = apply_thr(f0_b_raw, conf_b, thr) if thr is not None else f0_b_raw
             cents = hz_to_cents(f0, self.tonic)
-            color = THR_COLORS.get(thr, self.color_b) if thr else self.color_b
-            label = (f"{self.label_b} thr={thr:.2f}" if thr else self.label_b)
+            color = THR_COLORS.get(thr, self.color_b) if thr is not None else self.color_b
+            label = f"thr={thr:.2f}" if thr is not None else self.label_b
             b_tracks.append((time_b, cents, color, label))
 
-        # Primary track (first active thr) for difference plots
-        tb0, cents_b0, color_b0, _ = b_tracks[0]
-        time, cents_a, cents_b = align_cents(self.time_a, self.cents_a, tb0, cents_b0)
+        # Align every B track to A's grid (all share the same time_b → same result)
+        aligned_b = []
+        for tbx, cents_bx, col, lbl in b_tracks:
+            t_al, ca_al, cb_al = align_cents(self.time_a, self.cents_a, tbx, cents_bx)
+            pct_v = np.isfinite(cb_al).sum() / max(len(t_al), 1) * 100
+            aligned_b.append((t_al, ca_al, cb_al, col, lbl, pct_v))
+
+        multi_thr = len(aligned_b) > 1
+
+        # Primary track (lowest / first active threshold) — used for diff plots
+        time, cents_a, cents_b0, color_b0, lbl_b0, pct_voiced_b0 = aligned_b[0]
 
         voiced_a    = np.isfinite(cents_a)
-        voiced_b    = np.isfinite(cents_b)
-        both_voiced = voiced_a & voiced_b
-        diff        = np.where(both_voiced, cents_b - cents_a, np.nan)
+        voiced_b0   = np.isfinite(cents_b0)
+        both_voiced = voiced_a & voiced_b0
+        diff        = np.where(both_voiced, cents_b0 - cents_a, np.nan)
         abs_diff    = np.where(both_voiced, np.abs(diff), np.nan)
         agree_mask  = both_voiced & (abs_diff < AGREE_THR_CENTS)
         disag_mask  = both_voiced & ~agree_mask
-        only_a      = voiced_a & ~voiced_b
-        only_b      = ~voiced_a & voiced_b
+        only_a      = voiced_a & ~voiced_b0
+        only_b0     = ~voiced_a & voiced_b0
 
-        mae  = float(np.nanmean(np.abs(diff))) if np.any(np.isfinite(diff)) else 0.0
-        bias = float(np.nanmean(diff))         if np.any(np.isfinite(diff)) else 0.0
-
-        total = len(time)
+        total      = len(time)
+        mae        = float(np.nanmean(np.abs(diff))) if np.any(np.isfinite(diff)) else 0.0
+        bias       = float(np.nanmean(diff))         if np.any(np.isfinite(diff)) else 0.0
         pct_both   = both_voiced.sum() / total * 100
         pct_a_only = only_a.sum() / total * 100
-        pct_b_only = only_b.sum() / total * 100
+        pct_b_only = only_b0.sum() / total * 100
 
-        src_lbl = SOURCE_LABELS.get(self.current_source_b, self.current_source_b)
+        src_lbl   = SOURCE_LABELS.get(self.current_source_b, self.current_source_b)
         src_a_lbl = SOURCE_LABELS.get(self.source_a, self.source_a)
 
         for ax in (self.ax0, self.ax1, self.ax2, self.ax_hist):
             ax.cla()
 
         # ── ax0: pitch curves ─────────────────────────────────────────────────
-        _masked_line(self.ax0, time, cents_a, agree_mask, AGREE_COLOR,   lw=0.9, zorder=4)
-        _masked_line(self.ax0, time, cents_b, agree_mask, AGREE_COLOR,   lw=0.9, zorder=4)
-        _masked_line(self.ax0, time, cents_a, disag_mask, DISAG_A_COLOR, lw=0.8, zorder=3)
-        _masked_line(self.ax0, time, cents_b, disag_mask, DISAG_B_COLOR, lw=0.8, zorder=3)
-        _masked_line(self.ax0, time, cents_a, only_a,     ONLY_A_COLOR,  lw=0.7, zorder=3)
-        _masked_line(self.ax0, time, cents_b, only_b,     color_b0,      lw=0.7, zorder=3)
+        if multi_thr:
+            # Per-threshold agree/disagree vs A (each threshold compared independently)
+            per_thr = []
+            for t_al, ca_al, cb_al, col, lbl, pct_v in aligned_b:
+                bv      = np.isfinite(cb_al)
+                both_x  = voiced_a & bv
+                diff_x  = np.where(both_x, np.abs(cb_al - cents_a), np.nan)
+                agree_x = both_x & (diff_x < AGREE_THR_CENTS)
+                disag_x = both_x & ~agree_x
+                only_bx = bv & ~voiced_a
+                per_thr.append((cb_al, agree_x, disag_x, only_bx, bv, col, lbl, pct_v))
 
-        # Additional threshold overlays (dashed, thinner)
-        for tbx, cents_bx, col, lbl in b_tracks[1:]:
-            _, _, cx = align_cents(self.time_a, self.cents_a, tbx, cents_bx)
-            _masked_line(self.ax0, time, cx, np.isfinite(cx),
-                         col, lw=0.6, zorder=2, alpha=0.65, ls="--")
-            # ghost label in legend handled below
+            any_b_agrees = np.zeros(total, dtype=bool)
+            any_b_voiced = np.zeros(total, dtype=bool)
+            for _, agree_x, _, _, bv, *_ in per_thr:
+                any_b_agrees |= agree_x
+                any_b_voiced |= bv
 
-        handles = [
-            mpatches.Patch(color=AGREE_COLOR,   label=f"agree <{AGREE_THR_CENTS:.0f}¢  ({agree_mask.sum():,})"),
-            mpatches.Patch(color=DISAG_A_COLOR, label=f"{self.label_a} diverges"),
-            mpatches.Patch(color=DISAG_B_COLOR, label=f"{self.label_b} diverges"),
-            mpatches.Patch(color=ONLY_A_COLOR,  label=f"only {self.label_a}  ({pct_a_only:.1f}%)"),
-            mpatches.Patch(color=color_b0,      label=f"only {self.label_b}  ({pct_b_only:.1f}%)"),
-        ]
-        for _, _, col, lbl in b_tracks[1:]:
-            handles.append(mpatches.Patch(color=col, label=lbl, alpha=0.65))
+            a_grey      = voiced_a & any_b_agrees
+            a_own_color = voiced_a & any_b_voiced & ~any_b_agrees
+            a_only      = voiced_a & ~any_b_voiced
 
-        self.ax0.legend(handles=handles, loc="upper right", fontsize=7)
+            # Grey agree lines go to the background (z=2) so they never cover diverge colors
+            _masked_line(self.ax0, time, cents_a, a_grey, AGREE_COLOR, lw=0.9, zorder=2)
+            for cb_x, agree_x, disag_x, only_bx, bv, col, lbl, pct_v in per_thr:
+                _masked_line(self.ax0, time, cb_x, agree_x, AGREE_COLOR, lw=0.8, zorder=2)
+
+            # Diverge lines: most permissive (low thr) first → lowest z; least permissive on top
+            # per_thr is in ascending threshold order (thrs_sorted)
+            n_thr = len(per_thr)
+            for i, (cb_x, agree_x, disag_x, only_bx, bv, col, lbl, pct_v) in enumerate(per_thr):
+                z = 3 + i
+                _masked_line(self.ax0, time, cb_x, disag_x, col, lw=0.9, zorder=z)
+                _masked_line(self.ax0, time, cb_x, only_bx, col, lw=0.7, zorder=z, alpha=0.7)
+
+            # A reference on top of everything
+            _masked_line(self.ax0, time, cents_a, a_own_color, DISAG_A_COLOR, lw=0.9, zorder=3+n_thr)
+            _masked_line(self.ax0, time, cents_a, a_only,      ONLY_A_COLOR,  lw=0.7, zorder=3+n_thr)
+
+            a_pct = voiced_a.sum() / total * 100
+            handles = [
+                mpatches.Patch(color=AGREE_COLOR,
+                               label=f"agree <{AGREE_THR_CENTS:.0f}¢  ({any_b_agrees.sum():,} fr)"),
+                Line2D([0], [0], color=DISAG_A_COLOR, lw=1.0,
+                       label=f"{self.label_a} diverges from all  ({a_own_color.sum():,} fr)"),
+                Line2D([0], [0], color=ONLY_A_COLOR, lw=1.0,
+                       label=f"only {self.label_a}  ({a_only.sum()/total*100:.1f}%)"),
+            ]
+            for _, agree_x, disag_x, only_bx, bv, col, lbl, pct_v in per_thr:
+                handles.append(Line2D([0], [0], color=col, lw=1.5,
+                                      label=f"{self.label_b} {lbl}  "
+                                            f"({pct_v:.0f}% voiced · {disag_x.sum():,} fr diverge)"))
+            self.ax0.legend(handles=handles, loc="upper right", fontsize=7, framealpha=0.85)
+            agree_pct = any_b_agrees.sum() / total * 100
+            title_stats = (
+                f"tonic={self.tonic:.1f} Hz   A voiced={a_pct:.1f}%   "
+                f"agree={agree_pct:.1f}%   "
+                f"primary ({lbl_b0}): MAE={mae:.1f}¢  bias={bias:+.1f}¢"
+            )
+        else:
+            # Single-threshold: agree/disagree color coding
+            _masked_line(self.ax0, time, cents_a,  agree_mask, AGREE_COLOR,   lw=0.9, zorder=4)
+            _masked_line(self.ax0, time, cents_b0, agree_mask, AGREE_COLOR,   lw=0.9, zorder=4)
+            _masked_line(self.ax0, time, cents_a,  disag_mask, DISAG_A_COLOR, lw=0.8, zorder=3)
+            _masked_line(self.ax0, time, cents_b0, disag_mask, DISAG_B_COLOR, lw=0.8, zorder=3)
+            _masked_line(self.ax0, time, cents_a,  only_a,     ONLY_A_COLOR,  lw=0.7, zorder=3)
+            _masked_line(self.ax0, time, cents_b0, only_b0,    color_b0,      lw=0.7, zorder=3)
+            handles = [
+                mpatches.Patch(color=AGREE_COLOR,
+                               label=f"agree <{AGREE_THR_CENTS:.0f}¢  "
+                                     f"({agree_mask.sum():,} fr, {agree_mask.sum()/total*100:.1f}%)"),
+                mpatches.Patch(color=DISAG_A_COLOR,
+                               label=f"{self.label_a} diverges  ({disag_mask.sum():,} fr)"),
+                mpatches.Patch(color=DISAG_B_COLOR,
+                               label=f"{self.label_b} diverges  ({disag_mask.sum():,} fr)"),
+                mpatches.Patch(color=ONLY_A_COLOR,
+                               label=f"only {self.label_a}  ({pct_a_only:.1f}%)"),
+                mpatches.Patch(color=color_b0,
+                               label=f"only {self.label_b} [{lbl_b0}]  ({pct_b_only:.1f}%)"),
+            ]
+            self.ax0.legend(handles=handles, loc="upper right", fontsize=7, framealpha=0.85)
+            agree_pct = agree_mask.sum() / total * 100
+            title_stats = (
+                f"tonic={self.tonic:.1f} Hz   both:{pct_both:.1f}%   "
+                f"agree={agree_pct:.1f}%   MAE={mae:.1f}¢   bias={bias:+.1f}¢"
+            )
+
         self.ax0.set_ylabel("Cents re tonic")
         self.ax0.set_title(
             f"{self.recording_id}  |  {self.label_a} [{src_a_lbl}]  vs  "
-            f"{self.label_b} [{src_lbl}]\n"
-            f"tonic={self.tonic:.1f} Hz   both:{pct_both:.1f}%   "
-            f"MAE={mae:.1f}¢   bias={bias:+.1f}¢",
+            f"{self.label_b} [{src_lbl}]\n{title_stats}",
             fontsize=9,
         )
 
-        # ── ax1: |Δ| ─────────────────────────────────────────────────────────
-        self.ax1.fill_between(time, 0, np.abs(diff),
-                              where=np.isfinite(diff), color="orchid", alpha=0.7)
-        self.ax1.axhline(mae, color="purple", lw=1, ls="--", label=f"MAE={mae:.1f}¢")
+        # ── ax1: |Δ| cents ────────────────────────────────────────────────────
+        if multi_thr:
+            for t_al, ca_al, cb_al, col, lbl, _ in aligned_b:
+                n = len(time)
+                d_x = np.where(np.isfinite(cb_al[:n]) & np.isfinite(ca_al[:n]),
+                               cb_al[:n] - ca_al[:n], np.nan)
+                mae_x = float(np.nanmean(np.abs(d_x))) if np.any(np.isfinite(d_x)) else 0.0
+                self.ax1.plot(time[:n], np.abs(d_x), color=col, lw=0.75, alpha=0.8,
+                              label=f"{lbl}  MAE={mae_x:.1f}¢")
+            self.ax1.legend(loc="upper right", fontsize=7, framealpha=0.85)
+        else:
+            self.ax1.fill_between(time, 0, np.abs(diff),
+                                  where=np.isfinite(diff), color="orchid", alpha=0.7)
+            self.ax1.axhline(mae, color="purple", lw=1, ls="--", label=f"MAE={mae:.1f}¢")
+            self.ax1.legend(loc="upper right", fontsize=8)
         self.ax1.set_ylabel("|Δ| cents")
-        self.ax1.legend(loc="upper right", fontsize=8)
 
-        # ── ax2: signed Δ ─────────────────────────────────────────────────────
-        self.ax2.fill_between(time, 0, diff,
-                              where=np.isfinite(diff) & (diff > 0),
-                              color=DISAG_A_COLOR, alpha=0.6)
-        self.ax2.fill_between(time, 0, diff,
-                              where=np.isfinite(diff) & (diff < 0),
-                              color=DISAG_B_COLOR, alpha=0.6)
-        self.ax2.axhline(0,    color="black",  lw=0.8)
-        self.ax2.axhline(bias, color="purple", lw=1, ls="--", label=f"bias={bias:+.1f}¢")
-        self.ax2.set_ylabel("Δ cents")
+        # ── ax2: signed Δ (B − A) ─────────────────────────────────────────────
+        if multi_thr:
+            self.ax2.axhline(0, color="black", lw=0.8, zorder=5)
+            for t_al, ca_al, cb_al, col, lbl, _ in aligned_b:
+                n = len(time)
+                d_x = np.where(np.isfinite(cb_al[:n]) & np.isfinite(ca_al[:n]),
+                               cb_al[:n] - ca_al[:n], np.nan)
+                bias_x = float(np.nanmean(d_x)) if np.any(np.isfinite(d_x)) else 0.0
+                self.ax2.plot(time[:n], d_x, color=col, lw=0.75, alpha=0.75,
+                              label=f"{lbl}  bias={bias_x:+.1f}¢")
+            self.ax2.legend(loc="upper right", fontsize=7, framealpha=0.85)
+        else:
+            self.ax2.fill_between(time, 0, diff,
+                                  where=np.isfinite(diff) & (diff > 0),
+                                  color=DISAG_A_COLOR, alpha=0.6)
+            self.ax2.fill_between(time, 0, diff,
+                                  where=np.isfinite(diff) & (diff < 0),
+                                  color=DISAG_B_COLOR, alpha=0.6)
+            self.ax2.axhline(0,    color="black",  lw=0.8)
+            self.ax2.axhline(bias, color="purple", lw=1, ls="--", label=f"bias={bias:+.1f}¢")
+            self.ax2.legend(loc="upper right", fontsize=8)
+        self.ax2.set_ylabel("Δ cents (B − A)")
         self.ax2.set_xlabel("Time (s)")
-        self.ax2.legend(loc="upper right", fontsize=8)
 
         # ── divergence region highlights ──────────────────────────────────────
         regions = _top_divergence_regions(time, diff, TOP_N_REGIONS, REGION_SEC)
@@ -379,24 +475,53 @@ class InteractiveFig:
                 for (s, e, _), col in zip(regions, cols_r):
                     ax.axvspan(s, e, color=col, alpha=0.07)
 
-        # ── ax_hist: exclusive voiced histogram ───────────────────────────────
-        bins = np.arange(-1200, 2401, 50)
-        a_only_c = cents_a[only_a]
-        b_only_c = cents_b[only_b]
-        if len(a_only_c):
-            self.ax_hist.barh(bins[:-1], np.histogram(a_only_c, bins=bins)[0],
-                              height=48, color=ONLY_A_COLOR, alpha=0.8,
-                              label=f"only {self.label_a}")
-        if len(b_only_c):
-            self.ax_hist.barh(bins[:-1], -np.histogram(b_only_c, bins=bins)[0],
-                              height=48, color=color_b0, alpha=0.8,
-                              label=f"only {self.label_b}")
-        self.ax_hist.axhline(0, color="black", lw=0.5)
-        self.ax_hist.axvline(0, color="black", lw=0.8)
-        self.ax_hist.set_xlabel(f"← {self.label_b}   {self.label_a} →")
-        self.ax_hist.set_ylabel("Cents re tonic")
-        self.ax_hist.legend(fontsize=7)
-        self.ax_hist.set_title("Exclusive voiced\nframes", fontsize=9)
+        # ── ax_hist ───────────────────────────────────────────────────────────
+        if multi_thr:
+            # Summary bar chart: voiced% and MAE per threshold
+            thr_labels = [lbl for _, _, _, _, lbl, _ in aligned_b]
+            thr_colors = [col for _, _, _, col, _, _ in aligned_b]
+            pct_voiced = [pv  for _, _, _, _, _, pv  in aligned_b]
+            mae_vals   = []
+            for t_al, ca_al, cb_al, col, lbl, _ in aligned_b:
+                n   = len(time)
+                d_x = np.where(np.isfinite(cb_al[:n]) & np.isfinite(ca_al[:n]),
+                               cb_al[:n] - ca_al[:n], np.nan)
+                mae_vals.append(float(np.nanmean(np.abs(d_x)))
+                                if np.any(np.isfinite(d_x)) else 0.0)
+
+            y_pos = np.arange(len(thr_labels))
+            bars  = self.ax_hist.barh(y_pos, pct_voiced,
+                                      color=thr_colors, alpha=0.8, height=0.6)
+            self.ax_hist.set_yticks(y_pos)
+            self.ax_hist.set_yticklabels(thr_labels, fontsize=8)
+            self.ax_hist.set_xlabel("Voiced %", fontsize=8)
+            for bar, mae_v in zip(bars, mae_vals):
+                self.ax_hist.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height() / 2,
+                                  f"MAE={mae_v:.1f}¢", va="center", fontsize=7)
+            a_pct = voiced_a.sum() / total * 100
+            self.ax_hist.axvline(a_pct, color=self.color_a, lw=1.5, ls="--")
+            self.ax_hist.text(a_pct + 0.3, len(thr_labels) - 0.5,
+                              f"{self.label_a}\n{a_pct:.1f}%",
+                              color=self.color_a, fontsize=7, va="top")
+            self.ax_hist.set_title(f"{self.label_b}\nVoicing vs threshold", fontsize=9)
+        else:
+            bins     = np.arange(-1200, 2401, 50)
+            a_only_c = cents_a[only_a]
+            b_only_c = cents_b0[only_b0]
+            if len(a_only_c):
+                self.ax_hist.barh(bins[:-1], np.histogram(a_only_c, bins=bins)[0],
+                                  height=48, color=ONLY_A_COLOR, alpha=0.8,
+                                  label=f"only {self.label_a}")
+            if len(b_only_c):
+                self.ax_hist.barh(bins[:-1], -np.histogram(b_only_c, bins=bins)[0],
+                                  height=48, color=color_b0, alpha=0.8,
+                                  label=f"only {self.label_b}")
+            self.ax_hist.axhline(0, color="black", lw=0.5)
+            self.ax_hist.axvline(0, color="black", lw=0.8)
+            self.ax_hist.set_xlabel(f"← {self.label_b}   {self.label_a} →")
+            self.ax_hist.set_ylabel("Cents re tonic")
+            self.ax_hist.legend(fontsize=7)
+            self.ax_hist.set_title("Exclusive voiced\nframes", fontsize=9)
 
         self.fig.canvas.draw_idle()
 
